@@ -40,7 +40,8 @@ type FileMeta = {
   noteGruppo?: string
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+// Default to same-origin (Nginx will proxy /api to backend). Can override with VITE_API_BASE.
+const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 function App() {
   const [data, setData] = useState<ApiResponse | null>(null)

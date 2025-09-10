@@ -60,6 +60,24 @@ Apri <http://localhost:5173> e carica un file .docx. Puoi:
 
 ### Note di design e migliorie
 
+## Esecuzione con Docker
+
+Sono inclusi Dockerfile per backend e frontend e un docker-compose.
+
+Avvio:
+
+```bash
+docker compose up --build -d
+```
+
+Servizi esposti:
+
+- Frontend: http://localhost:8085
+- Backend: non esposto all'host, raggiungibile dal frontend via proxy /api
+
+Persistenza: il database SQLite è montato su un volume Docker (`backend_data`) ed è configurabile via variabile `BACKEND_DB_PATH`.
+
+Cloudflared: per pubblicare su un hostname, creare una rotta con servizio `http://localhost:8085`.
 - Merge dei run contigui con stesso colore per testo evidenziato più pulito
 - Mappatura colore → macro-categoria modificabile
 - Statistiche basilari per categoria

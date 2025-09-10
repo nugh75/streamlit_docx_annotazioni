@@ -3,7 +3,8 @@ import os
 import sqlite3
 from typing import Any, Dict
 
-DB_PATH = os.path.join(os.path.dirname(__file__), 'state.db')
+# Allow overriding DB path via env for Docker volume persistence
+DB_PATH = os.getenv('BACKEND_DB_PATH', os.path.join(os.path.dirname(__file__), 'state.db'))
 
 
 def _connect():
