@@ -3,3 +3,6 @@ python-docx
 lxml
 pandas
 openpyxl
+fastapi
+uvicorn
+python-multipart

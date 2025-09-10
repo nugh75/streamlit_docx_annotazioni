@@ -1,0 +1,23 @@
+{
+  "name": "docx-annotazioni-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5173"
+  },
+  "dependencies": {
+    "react": "18.2.0",
+  "react-dom": "18.2.0",
+  "xlsx": "0.18.5"
+  },
+  "devDependencies": {
+    "@types/react": "18.2.61",
+    "@types/react-dom": "18.2.19",
+    "vite": "5.4.3",
+    "@vitejs/plugin-react": "4.3.1",
+    "typescript": "5.5.4"
+  }
+}
