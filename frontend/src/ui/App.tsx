@@ -1,6 +1,135 @@
 import React, { useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 
+const COLOR_LABELS: Record<string, string> = {
+  yellow: 'Giallo',
+  bright_green: 'Verde brillante',
+  turquoise: 'Turchese',
+  pink: 'Rosa',
+  blue: 'Blu',
+  red: 'Rosso',
+  dark_blue: 'Blu scuro',
+  teal: 'Verde acqua',
+  green: 'Verde',
+  violet: 'Viola',
+  dark_red: 'Rosso scuro',
+  dark_yellow: 'Giallo scuro',
+  gray_50: 'Grigio 50%',
+  gray_25: 'Grigio 25%',
+  black: 'Nero',
+  white: 'Bianco',
+  light_gray: 'Grigio chiaro',
+  dark_gray: 'Grigio scuro',
+  orange: 'Arancione',
+  light_orange: 'Arancione chiaro',
+  light_yellow: 'Giallo chiaro',
+  light_green: 'Verde chiaro',
+  light_blue: 'Blu chiaro',
+  light_turquoise: 'Turchese chiaro',
+  magenta: 'Magenta',
+  dark_teal: 'Verde acqua scuro',
+  dark_magenta: 'Magenta scuro',
+}
+
+function normalizeColorKey(raw: string | null | undefined): string {
+  return (raw || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s*\(\d+\)\s*$/, '')
+}
+
+function colorLabel(raw: string | null | undefined): string {
+  const key = normalizeColorKey(raw)
+  if (!key) return '—'
+  if (COLOR_LABELS[key]) return COLOR_LABELS[key]
+  return key
+    .split(/[_\s]+/)
+    .map(part => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
+    .join(' ')
+}
+
+function sanitizeColorMap(map: Record<string, string> | undefined | null): Record<string, string> {
+  if (!map) return {}
+  let changed = false
+  const result: Record<string, string> = {}
+  for (const [key, value] of Object.entries(map)) {
+    const trimmed = (value || '').trim()
+    const keyNorm = normalizeColorKey(key)
+    const valueNorm = normalizeColorKey(trimmed)
+    if (!trimmed || (valueNorm && valueNorm === keyNorm) || (!valueNorm && keyNorm)) {
+      const desired = colorLabel(key)
+      result[key] = desired
+      if (desired !== value) changed = true
+    } else {
+      result[key] = trimmed
+      if (trimmed !== value) changed = true
+    }
+  }
+  if (!changed) {
+    let same = Object.keys(result).length === Object.keys(map).length
+    if (same) {
+      for (const [k, v] of Object.entries(map)) {
+        if (result[k] !== v) {
+          same = false
+          break
+        }
+      }
+    }
+    if (same) return map
+  }
+  return result
+}
+
+function colorCategoryFromMap(colorKey: string | null | undefined, map: Record<string, string>): string {
+  if (!colorKey) return ''
+  const attempts = Array.from(
+    new Set([
+      colorKey,
+      colorKey.toLowerCase(),
+      normalizeColorKey(colorKey),
+      normalizeColorKey(colorKey.toLowerCase()),
+    ].filter(Boolean))
+  ) as string[]
+  for (const key of attempts) {
+    const val = (map[key] || '').trim()
+    if (val) return val
+  }
+  return ''
+}
+
+function sanitizeCategoryOverrides(map: Record<string, string> | undefined | null): Record<string, string> {
+  if (!map) return {}
+  let changed = false
+  const result: Record<string, string> = {}
+  for (const [key, value] of Object.entries(map)) {
+    const trimmed = (value || '').trim()
+    if (trimmed) {
+      const normalized = normalizeColorKey(trimmed)
+      if (normalized && COLOR_LABELS[normalized]) {
+        const desired = colorLabel(trimmed)
+        result[key] = desired
+        if (desired !== value) changed = true
+        continue
+      }
+    }
+    result[key] = trimmed
+    if (trimmed !== value) changed = true
+  }
+  if (!changed) {
+    let same = Object.keys(result).length === Object.keys(map).length
+    if (same) {
+      for (const [k, v] of Object.entries(map)) {
+        if (result[k] !== v) {
+          same = false
+          break
+        }
+      }
+    }
+    if (same) return map
+  }
+  return result
+}
+
 interface Highlight {
   filename: string
   type: 'highlight'
@@ -11,7 +140,7 @@ interface Highlight {
   offset_start: number
   offset_end: number
   // server-provided paragraph index for stable linking
-  para_index?: number
+  para_index?: number | null
 }
 
 interface CommentItem {
@@ -24,10 +153,16 @@ interface CommentItem {
   code?: string | null
 }
 
+interface ParagraphInfo {
+  filename: string
+  para_index: number | null
+  text: string
+}
+
 interface ApiResponse {
   highlights: Highlight[]
   comments: CommentItem[]
-  paragraphs?: { filename: string; para_index: number; text: string }[]
+  paragraphs?: ParagraphInfo[]
 }
 
 type FileMeta = {
@@ -89,6 +224,8 @@ function App() {
   const [kView, setKView] = useState<'colore' | 'xx'>('colore')
 
   const paraRef = useRef<HTMLDivElement>(null)
+  const pendingJump = useRef<Highlight | null>(null)
+  const [jumpSeq, setJumpSeq] = useState(0)
 
   const paragraphs = useMemo(() => {
     if (!data) return [] as { filename: string; text: string; highlights: Highlight[] }[]
@@ -100,6 +237,24 @@ function App() {
       groups[key].highs.push(h)
     }
     return Object.values(groups).map(({ filename, text, highs }) => ({ filename, text, highlights: highs.sort((a,b)=>a.offset_start-b.offset_start) }))
+  }, [data])
+
+  const highlightsByFile = useMemo(() => {
+    if (!data) return {} as Record<string, Highlight[]>
+    const map: Record<string, Highlight[]> = {}
+    for (const h of data.highlights) {
+      ;(map[h.filename] ||= []).push(h)
+    }
+    return map
+  }, [data])
+
+  const paragraphsByFile = useMemo(() => {
+    if (!data || !data.paragraphs) return {} as Record<string, ParagraphInfo[]>
+    const map: Record<string, ParagraphInfo[]> = {}
+    for (const p of data.paragraphs) {
+      ;(map[p.filename] ||= []).push(p)
+    }
+    return map
   }, [data])
 
   // Keep viewerDoc aligned with uploaded data
@@ -116,10 +271,29 @@ function App() {
     const colors = Array.from(new Set(data.highlights.map(h => (h.highlight_color||'').toLowerCase()).filter(Boolean)))
     // ensure map has keys
     const m: Record<string,string> = { ...colorMap }
-    colors.forEach(c => m[c] = m[c] ?? c)
+    colors.forEach(c => {
+      const current = (m[c] || '').trim()
+      if (!current || normalizeColorKey(current) === normalizeColorKey(c)) {
+        m[c] = colorLabel(c)
+      }
+    })
     if (JSON.stringify(m) !== JSON.stringify(colorMap)) setColorMap(m)
     return colors
   }, [data])
+
+  React.useEffect(() => {
+    const sanitized = sanitizeColorMap(colorMap)
+    if (sanitized !== colorMap) {
+      setColorMap(sanitized)
+    }
+  }, [colorMap])
+
+  React.useEffect(() => {
+    const sanitized = sanitizeCategoryOverrides(catOverride)
+    if (sanitized !== catOverride) {
+      setCatOverride(sanitized)
+    }
+  }, [catOverride])
 
   // Persistence: load from localStorage once
   React.useEffect(() => {
@@ -130,8 +304,8 @@ function App() {
   const savedCatColors = localStorage.getItem('qd_categoryColors')
   const savedCodeMap = localStorage.getItem('qd_codeMap')
       if (savedMeta) setMeta(JSON.parse(savedMeta))
-      if (savedMap) setColorMap(JSON.parse(savedMap))
-      if (savedCat) setCatOverride(JSON.parse(savedCat))
+      if (savedMap) setColorMap(sanitizeColorMap(JSON.parse(savedMap)))
+      if (savedCat) setCatOverride(sanitizeCategoryOverrides(JSON.parse(savedCat)))
   if (savedCatColors) setCategoryColors(JSON.parse(savedCatColors))
   if (savedCodeMap) setCodeMap(JSON.parse(savedCodeMap))
     } catch {}
@@ -163,10 +337,10 @@ function App() {
         const st = await res.json()
         if (st && typeof st === 'object') {
           if (st.meta) setMeta((prev) => ({ ...prev, ...st.meta }))
-          if (st.colorMap) setColorMap((prev) => ({ ...prev, ...st.colorMap }))
+          if (st.colorMap) setColorMap((prev) => sanitizeColorMap({ ...prev, ...st.colorMap }))
           if (st.codeMap) setCodeMap((prev) => ({ ...prev, ...st.codeMap }))
           if (st.categoryColors) setCategoryColors((prev) => ({ ...prev, ...st.categoryColors }))
-          if (st.catOverride) setCatOverride((prev) => ({ ...prev, ...st.catOverride }))
+          if (st.catOverride) setCatOverride((prev) => sanitizeCategoryOverrides({ ...prev, ...st.catOverride }))
         }
         loadedFromServer.current = true
       } catch {
@@ -202,7 +376,8 @@ function App() {
     const counts: Record<string, number> = {}
     for (const h of data.highlights) {
       const color = (h.highlight_color||'').toLowerCase()
-      const cat = color ? (colorMap[color] || color) : 'non-categorizzato'
+      const rawCat = colorCategoryFromMap(color, colorMap)
+      const cat = color ? (rawCat || colorLabel(color)) : 'non-categorizzato'
       counts[cat] = (counts[cat] || 0) + 1
     }
     return Object.entries(counts).map(([category, count]) => ({ category, count })).sort((a,b)=>b.count-a.count)
@@ -229,45 +404,139 @@ function App() {
     return `${h.filename}|${h.para_index ?? 'np'}|${h.offset_start}|${h.offset_end}|${h.text}`
   }
 
-  function jumpTo(h: Highlight) {
-    const id = `hl-${sig(h)}`
+  function doScrollTo(id: string) {
     const el = document.getElementById(id)
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      // brief flash outline to draw attention
-      const prev = el.getAttribute('data-oldbox')
-      const old = (el as HTMLElement).style.boxShadow
-      el.setAttribute('data-oldbox', old || '')
-      ;(el as HTMLElement).style.boxShadow = '0 0 0 3px rgba(0,0,0,0.35) inset'
-      setTimeout(() => {
-        ;(el as HTMLElement).style.boxShadow = prev ?? ''
-      }, 650)
-    }
+    if (!el) return false
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const prev = el.getAttribute('data-oldbox')
+    const old = (el as HTMLElement).style.boxShadow
+    el.setAttribute('data-oldbox', old || '')
+    ;(el as HTMLElement).style.boxShadow = '0 0 0 3px rgba(0,0,0,0.35) inset'
+    setTimeout(() => {
+      if (el instanceof HTMLElement) {
+        el.style.boxShadow = prev ?? ''
+      }
+    }, 650)
+    return true
   }
+
+  function scheduleJump(h: Highlight) {
+    pendingJump.current = h
+    setJumpSeq((seq) => seq + 1)
+  }
+
+  function jumpTo(h: Highlight) {
+    scheduleJump(h)
+    setViewerDoc((prev) => (prev === h.filename ? prev : h.filename))
+    if (tab !== 'viewer') setTab('viewer')
+  }
+
+  React.useEffect(() => {
+    if (!pendingJump.current) return
+    let attempts = 0
+    let cancelled = false
+    const tick = () => {
+      if (cancelled) return
+      const target = pendingJump.current
+      if (!target) return
+      // ensure viewer tab + document selected
+      if (tab !== 'viewer') {
+        if (attempts++ < 20) {
+          setTimeout(tick, 80)
+        }
+        return
+      }
+      if (viewerDoc && viewerDoc !== target.filename) {
+        if (attempts++ < 20) {
+          setTimeout(tick, 80)
+        }
+        return
+      }
+      const id = `hl-${sig(target)}`
+      if (doScrollTo(id)) {
+        pendingJump.current = null
+        return
+      }
+      if (attempts++ < 20) {
+        setTimeout(tick, 80)
+      } else {
+        pendingJump.current = null
+      }
+    }
+    tick()
+    return () => {
+      cancelled = true
+    }
+  }, [jumpSeq, tab, viewerDoc, data])
+  // (Removed stray closing brace that caused build error)
 
   // Enrich comments by linking to a matching highlight (via quoted text)
   const commentsEnriched = useMemo(() => {
-    if (!data) return [] as (CommentItem & { highlight?: Highlight; color?: string | null; category?: string })[]
-    const highs = data.highlights
+    if (!data) return [] as (CommentItem & { highlight?: Highlight; color?: string | null; category?: string; highlightText?: string })[]
     const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase()
+    const highsAll = data.highlights
     return data.comments.map(c => {
-      const q = norm(c.quoted || '')
+      const qNorm = norm(c.quoted || '')
+      const docHighs = c.filename ? (highlightsByFile[c.filename] || []) : highsAll
       let linked: Highlight | undefined
-      if (q) {
-        linked = highs.find(h => {
+      if (qNorm && docHighs.length) {
+        const candidateParas = new Set<string>()
+        if (c.filename) {
+          for (const p of paragraphsByFile[c.filename] || []) {
+            if (norm(p.text).includes(qNorm)) {
+              if (p.para_index !== null && p.para_index !== undefined) {
+                candidateParas.add(`idx:${p.para_index}`)
+              }
+              candidateParas.add(`txt:${norm(p.text)}`)
+            }
+          }
+        }
+        const filterMatches = (source: Highlight[]) => source.filter(h => {
+          const keyIdx = h.para_index !== null && h.para_index !== undefined ? `idx:${h.para_index}` : null
+          const keyTxt = `txt:${norm(h.paragraph)}`
+          const inParagraph = candidateParas.size === 0 || candidateParas.has(keyTxt) || (keyIdx ? candidateParas.has(keyIdx) : false)
+          if (!inParagraph) return false
           const ht = norm(h.text)
-          return ht && (ht.includes(q) || q.includes(ht))
+          return ht && (ht.includes(qNorm) || qNorm.includes(ht))
         })
+        let candidates = filterMatches(docHighs)
+        if (!candidates.length) {
+          candidates = docHighs.filter(h => {
+            const ht = norm(h.text)
+            return ht && (ht.includes(qNorm) || qNorm.includes(ht))
+          })
+        }
+        if (candidates.length) {
+          const scored = candidates
+            .map(h => {
+              const ht = norm(h.text)
+              const exact = ht === qNorm
+              const contains = ht.includes(qNorm)
+              const contained = qNorm.includes(ht)
+              const diff = Math.abs(ht.length - qNorm.length)
+              const idxScore = h.para_index ?? Number.MAX_SAFE_INTEGER
+              return { h, exact, contains, contained, diff, idxScore, textLen: ht.length }
+            })
+            .sort((a, b) => {
+              if (a.exact !== b.exact) return a.exact ? -1 : 1
+              if (a.contains !== b.contains) return a.contains ? -1 : 1
+              if (a.contained !== b.contained) return a.contained ? -1 : 1
+              if (a.diff !== b.diff) return a.diff - b.diff
+              if (a.idxScore !== b.idxScore) return a.idxScore - b.idxScore
+              return a.textLen - b.textLen
+            })
+          linked = scored[0]?.h
+        }
       }
-  const color = linked ? (linked.highlight_color || null) : null
-      // default category from colorMap[color] or color
+      const color = linked ? (linked.highlight_color || null) : null
       const colorKey = (color || '').toLowerCase()
-      const defaultCat = colorKey ? (colorMap[colorKey] || colorKey) : 'non-categorizzato'
-  const keyOverride = `${c.filename || ''}::${c.id}`
-  const effectiveCat = catOverride[keyOverride] || defaultCat
-      return { ...c, highlight: linked, color, category: effectiveCat }
+      const mapped = colorCategoryFromMap(colorKey, colorMap)
+      const defaultCat = colorKey ? (mapped || colorLabel(colorKey)) : 'non-categorizzato'
+      const keyOverride = `${c.filename || ''}::${c.id}`
+      const effectiveCat = catOverride[keyOverride] || defaultCat
+      return { ...c, highlight: linked, color, category: effectiveCat, highlightText: linked?.text || '' }
     })
-  }, [data, colorMap, catOverride])
+  }, [data, colorMap, catOverride, highlightsByFile, paragraphsByFile])
 
   const commentDocs = useMemo(() => {
     const set = new Set<string>()
@@ -313,7 +582,8 @@ function App() {
       arr = arr.filter(c =>
         (c.text || '').toLowerCase().includes(q) ||
         (c.quoted || '').toLowerCase().includes(q) ||
-        (c.author || '').toLowerCase().includes(q)
+        (c.author || '').toLowerCase().includes(q) ||
+        ((c.highlightText || c.highlight?.text || '').toLowerCase().includes(q))
       )
     }
     return arr
@@ -358,8 +628,9 @@ function App() {
         date: c.date,
         code: c.code || '',
         category: c.category || '',
-        color: c.color || '',
+        color: colorLabel(c.color),
         quoted: c.quoted || '',
+        highlighted: c.highlightText || c.highlight?.text || '',
         comment: c.text || '',
         tipo: m?.tipo || '',
         intervistatore: m?.intervistatore || '',
@@ -383,8 +654,9 @@ function App() {
         Data: c.date,
         Codice: c.code || '',
         Categoria: c.category || '',
-        Colore: c.color || '',
+        Colore: colorLabel(c.color),
         "Testo selezionato": c.quoted || '',
+        "Testo evidenziato": c.highlightText || c.highlight?.text || '',
         Commento: c.text || '',
         Tipo: m?.tipo || '',
         Intervistatore: m?.intervistatore || '',
@@ -529,11 +801,11 @@ function App() {
                   {categories.map(c => (
                     <div key={c} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid #eee', borderRadius: 6, padding: 6 }}>
                       <span style={{ width: 12, height: 12, background: c, display: 'inline-block', border: '1px solid #ccc' }} />
-                      <span style={{ minWidth: 80 }}>{c}</span>
+                      <span style={{ minWidth: 80 }}>{colorLabel(c)}</span>
                       <input
                         value={colorMap[c] || ''}
                         onChange={e => setColorMap({ ...colorMap, [c]: e.target.value })}
-                        placeholder={c}
+                        placeholder={colorLabel(c)}
                       />
                     </div>
                   ))}
@@ -599,7 +871,8 @@ function App() {
                     chunks.push(<span key={`t-${cursor}`}>{p.text.slice(cursor, start)}</span>)
                   }
           const color = (h.highlight_color || '').toLowerCase()
-          const cat = color ? (colorMap[color] || color) : 'non-categorizzato'
+          const rawCat = colorCategoryFromMap(color, colorMap)
+          const cat = color ? (rawCat || colorLabel(color)) : 'non-categorizzato'
           const labelColor = categoryColors[cat] || color || 'yellow'
                   chunks.push(
                     <span
@@ -646,7 +919,7 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <select multiple value={fColor} onChange={e => setFColor(readMulti(e))} size={Math.min(6, Math.max(3, commentColors.length))}>
-                    {commentColors.map(c => (<option key={c} value={c}>{c}</option>))}
+                    {commentColors.map(c => (<option key={c} value={c}>{colorLabel(c)}</option>))}
                   </select>
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button onClick={() => setFColor(commentColors)}>Tutti</button>
@@ -724,6 +997,9 @@ function App() {
                   const color = (c.color || '').toLowerCase()
                   const cat = c.category || '—'
                   const labelColor = categoryColors[cat] || color || '#bbb'
+                  const highlightedFull = (c.highlightText || c.highlight?.text || '').trim()
+                  const quotedText = (c.quoted || '').trim()
+                  const showFullHighlight = highlightedFull && highlightedFull !== quotedText
                   return (
                     <div key={idx} style={{ border: '1px solid #eee', padding: 10, borderLeft: `4px solid ${labelColor}`, marginBottom: 10, background: '#fff' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
@@ -732,6 +1008,9 @@ function App() {
                       </div>
                       <div style={{ margin: '6px 0', fontWeight: 600 }}>{c.text || '—'}</div>
                       {c.quoted && <div style={{ fontSize: 13, color: '#333' }}>Testo selezionato: <em>“{c.quoted}”</em></div>}
+                      {showFullHighlight && (
+                        <div style={{ fontSize: 13, color: '#333' }}>Testo evidenziato: <em>“{highlightedFull}”</em></div>
+                      )}
                       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 6 }}>
                         <span style={{ fontSize: 12 }}>Codice: <strong>{c.code || '—'}</strong></span>
                         <span style={{ fontSize: 12 }}>Etichetta: <strong>{cat}</strong></span>
@@ -776,7 +1055,7 @@ function App() {
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <select multiple value={kColor} onChange={e => setKColor(readMulti(e))} size={Math.min(6, Math.max(3, commentColors.length))}>
-                        {commentColors.map(c => (<option key={c} value={c}>{c}</option>))}
+                        {commentColors.map(c => (<option key={c} value={c}>{colorLabel(c)}</option>))}
                       </select>
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button onClick={() => setKColor(commentColors)}>Tutti</button>
@@ -880,7 +1159,8 @@ function App() {
                     items = items.filter(c =>
                       (c.text || '').toLowerCase().includes(q) ||
                       (c.quoted || '').toLowerCase().includes(q) ||
-                      (c.author || '').toLowerCase().includes(q)
+                      (c.author || '').toLowerCase().includes(q) ||
+                      ((c.highlightText || c.highlight?.text || '').toLowerCase().includes(q))
                     )
                   }
 
@@ -936,6 +1216,12 @@ function App() {
                                 <div style={{ fontSize: 12, color: '#555' }}>{c.filename}</div>
                                 <div style={{ fontWeight: 600, margin: '4px 0' }}>{c.text || '—'}</div>
                                 {c.quoted && <div style={{ fontSize: 12, color: '#495057' }}>“{c.quoted}”</div>}
+                                {(() => {
+                                  const highlightedFull = (c.highlightText || c.highlight?.text || '').trim()
+                                  const quotedText = (c.quoted || '').trim()
+                                  if (!highlightedFull || highlightedFull === quotedText) return null
+                                  return <div style={{ fontSize: 12, color: '#495057' }}>Testo evidenziato: “{highlightedFull}”</div>
+                                })()}
                                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
                                   {/* Category badge with category label color */}
                                   <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 999, background: (categoryColors[c.category || 'non-categorizzato'] || '#e9ecef'), color: '#212529' }}>{c.category || 'non-categorizzato'}</span>
@@ -1171,7 +1457,8 @@ function App() {
         {!data && <div>Nessun dato.</div>}
         {data && data.highlights.filter(h => !viewerDoc || h.filename === viewerDoc).map((h, idx) => {
           const color = (h.highlight_color||'').toLowerCase()
-          const cat = color ? (colorMap[color] || color) : 'non-categorizzato'
+          const rawCat = colorCategoryFromMap(color, colorMap)
+          const cat = color ? (rawCat || colorLabel(color)) : 'non-categorizzato'
           return (
             <div
               key={idx}
@@ -1190,7 +1477,8 @@ function App() {
           const counts: Record<string, number> = {}
           for (const h of filtered) {
             const c = (h.highlight_color||'').toLowerCase()
-            const cat = c ? (colorMap[c] || c) : 'non-categorizzato'
+            const rawCat = colorCategoryFromMap(c, colorMap)
+            const cat = c ? (rawCat || colorLabel(c)) : 'non-categorizzato'
             counts[cat] = (counts[cat]||0)+1
           }
           const localStats = Object.entries(counts).map(([category, count]) => ({ category, count })).sort((a,b)=>b.count-a.count)
