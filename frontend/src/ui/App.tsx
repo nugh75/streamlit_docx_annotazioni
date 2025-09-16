@@ -1,6 +1,66 @@
 import React, { useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 
+type MacroKey = 'CE' | 'CS' | 'BE' | 'IN' | 'CC' | 'A'
+
+const MACRO_INFO: Record<MacroKey, { label: string; color: string }> = {
+  CE: { label: 'Comunità educante', color: '#d0ebff' },
+  CS: { label: 'Cambiamenti scuola', color: '#d3f9d8' },
+  BE: { label: 'Benessere', color: '#ffe3e3' },
+  IN: { label: 'Inclusione', color: '#ffe8cc' },
+  CC: { label: 'Cultura e cittadinanza', color: '#e5dbff' },
+  A: { label: 'Aspetti positivi/negativi', color: '#e9ecef' },
+}
+
+const CODE_INFO: Record<string, { label: string; macro: MacroKey }> = {
+  CE: { label: MACRO_INFO.CE.label, macro: 'CE' },
+  CE_T: { label: 'Rapporto con il territorio', macro: 'CE' },
+  CE_F: { label: 'Rapporto con le famiglie', macro: 'CE' },
+  CE_P: { label: 'Coinvolgimento progettuale (progettazione delle attività e conduzione)', macro: 'CE' },
+  CE_Q: { label: 'Qualità dell’esperienza', macro: 'CE' },
+  CS: { label: MACRO_INFO.CS.label, macro: 'CS' },
+  CS_V: { label: 'Visione di scuola (immagine e ruolo alternativo della scuola)', macro: 'CS' },
+  CS_D: { label: 'Impatto sulla didattica per i docenti', macro: 'CS' },
+  CS_S: { label: 'Impatto sulla didattica per gli studenti', macro: 'CS' },
+  BE: { label: MACRO_INFO.BE.label, macro: 'BE' },
+  BE_D: { label: 'Impatto sulle relazioni per i docenti', macro: 'BE' },
+  BE_S: { label: 'Impatto sulle relazioni per gli studenti', macro: 'BE' },
+  BE_E: { label: 'Impatto emotivo', macro: 'BE' },
+  IN: { label: MACRO_INFO.IN.label, macro: 'IN' },
+  IN_G: { label: 'Impatto sull’inclusione', macro: 'IN' },
+  IN_DS: { label: 'Impatto sulla dispersione scolastica', macro: 'IN' },
+  IN_DI: { label: 'Impatto sulla prevenzione delle discriminazioni', macro: 'IN' },
+  CC: { label: MACRO_INFO.CC.label, macro: 'CC' },
+  CC_CU: { label: 'Impatto sulla cultura', macro: 'CC' },
+  CC_CA: { label: 'Impatto sulla cittadinanza attiva', macro: 'CC' },
+  A: { label: MACRO_INFO.A.label, macro: 'A' },
+  A_P: { label: 'Aspetti positivi', macro: 'A' },
+  A_N: { label: 'Aspetti negativi', macro: 'A' },
+  A_PS: { label: 'Proposte e suggerimenti', macro: 'A' },
+}
+
+const CODE_LIST_BY_TYPE: Record<'Intervista' | 'Focus group', string[]> = {
+  Intervista: ['CE_T', 'CE_F', 'CE_P', 'CS_V', 'CS_D', 'CS_S', 'BE_D', 'BE_S', 'BE_E', 'IN_G', 'IN_DS', 'IN_DI', 'CC_CU', 'CC_CA', 'A_P', 'A_N', 'A_PS'],
+  'Focus group': ['CE_Q', 'CE_P', 'CE_T', 'CS_V', 'CS_S', 'BE_S', 'BE_E', 'IN_G', 'IN_DS', 'IN_DI', 'CC_CU', 'CC_CA', 'A_P', 'A_N', 'A_PS'],
+}
+
+const DEFAULT_CODE_MAP: Record<string, string> = Object.keys(CODE_INFO).reduce((acc, code) => {
+  acc[code] = CODE_INFO[code].label
+  return acc
+}, {} as Record<string, string>)
+
+const LABEL_TO_MACRO: Record<string, MacroKey> = Object.values(CODE_INFO).reduce((acc, info) => {
+  acc[info.label] = info.macro
+  return acc
+}, {} as Record<string, MacroKey>)
+
+const DEFAULT_LABEL_COLORS: Record<string, string> = Object.values(CODE_INFO).reduce((acc, info) => {
+  acc[info.label] = MACRO_INFO[info.macro].color
+  return acc
+}, { 'non-categorizzato': '#f8f9fa' } as Record<string, string>)
+
+const CODE_TOKEN_REGEX = /\b[A-Z]{1,4}(?:_[A-Z]{1,4})?\b/g
+
 const COLOR_LABELS: Record<string, string> = {
   yellow: 'Giallo',
   bright_green: 'Verde brillante',
@@ -29,6 +89,42 @@ const COLOR_LABELS: Record<string, string> = {
   magenta: 'Magenta',
   dark_teal: 'Verde acqua scuro',
   dark_magenta: 'Magenta scuro',
+}
+
+function normalizeCodeToken(raw: string | null | undefined): string {
+  return (raw || '').trim().toUpperCase()
+}
+
+function macroFromCode(code: string): MacroKey | null {
+  const normalized = normalizeCodeToken(code)
+  if (!normalized) return null
+  if (CODE_INFO[normalized]) return CODE_INFO[normalized].macro
+  const prefix = normalized.split('_')[0]
+  return prefix in MACRO_INFO ? (prefix as MacroKey) : null
+}
+
+function defaultLabelForCode(code: string): string {
+  const normalized = normalizeCodeToken(code)
+  if (!normalized) return ''
+  return CODE_INFO[normalized]?.label || normalized
+}
+
+function isKnownCodeToken(token: string): boolean {
+  if (!token) return false
+  if (CODE_INFO[token]) return true
+  if (token.includes('_')) {
+    const prefix = token.split('_')[0]
+    return prefix in MACRO_INFO
+  }
+  return token in MACRO_INFO
+}
+
+function defaultColorForLabel(label: string): string {
+  return DEFAULT_LABEL_COLORS[label] || '#f8f9fa'
+}
+
+function macroFromLabel(label: string): MacroKey | null {
+  return LABEL_TO_MACRO[label] || null
 }
 
 function normalizeColorKey(raw: string | null | undefined): string {
@@ -151,6 +247,7 @@ interface CommentItem {
   quoted: string
   filename?: string
   code?: string | null
+  codes?: string[]
 }
 
 interface ParagraphInfo {
@@ -183,8 +280,8 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [colorMap, setColorMap] = useState<Record<string, string>>({})
-  const [codeMap, setCodeMap] = useState<Record<string, string>>({})
-  const [tab, setTab] = useState<'viewer' | 'comments' | 'dashboard' | 'kanban' | 'documenti' | 'impostazioni'>('viewer')
+  const [codeMap, setCodeMap] = useState<Record<string, string>>(() => ({ ...DEFAULT_CODE_MAP }))
+  const [tab, setTab] = useState<'viewer' | 'comments' | 'dashboard' | 'kanban' | 'documenti' | 'impostazioni' | 'legenda'>('viewer')
   const [meta, setMeta] = useState<Record<string, FileMeta>>({}) // per-filename metadata (client-side)
   const [catOverride, setCatOverride] = useState<Record<string, string>>({}) // key filename::id -> category override
   const [viewerDoc, setViewerDoc] = useState<string>('')
@@ -222,10 +319,58 @@ function App() {
   const [kScuola, setKScuola] = useState<string[]>([])
   const [kQuery, setKQuery] = useState<string>("")
   const [kView, setKView] = useState<'colore' | 'xx'>('colore')
+  const [dbTipo, setDbTipo] = useState<string[]>([])
+  const [dbScuola, setDbScuola] = useState<string[]>([])
+  const [dbRuolo, setDbRuolo] = useState<string[]>([])
+  const [dbGruppo, setDbGruppo] = useState<string[]>([])
+  const [dbIntervistatore, setDbIntervistatore] = useState<string[]>([])
+  const [dbIntervistato, setDbIntervistato] = useState<string[]>([])
+  const [dbQuery, setDbQuery] = useState<string>('')
+  const [dbMacroChart, setDbMacroChart] = useState<'istogramma' | 'torta'>('istogramma')
+  const [dbCatChart, setDbCatChart] = useState<'istogramma' | 'torta'>('istogramma')
+  const [dbCategoryFilter, setDbCategoryFilter] = useState<string[]>([])
+  const [dbCompareLayout, setDbCompareLayout] = useState<'stack' | 'columns'>('columns')
+  const [compareMode, setCompareMode] = useState<'scuola' | 'ruolo'>('scuola')
+  const [compareSelectionA, setCompareSelectionA] = useState<string>('')
+  const [compareSelectionB, setCompareSelectionB] = useState<string>('')
 
   const paraRef = useRef<HTMLDivElement>(null)
   const pendingJump = useRef<Highlight | null>(null)
   const [jumpSeq, setJumpSeq] = useState(0)
+
+  const collectCodes = React.useCallback((comment: CommentItem): string[] => {
+    const tokens: string[] = []
+    const seen = new Set<string>()
+    const pushToken = (token: string | null | undefined) => {
+      const normalized = normalizeCodeToken(token)
+      if (!normalized || seen.has(normalized)) return
+      if (!isKnownCodeToken(normalized)) return
+      seen.add(normalized)
+      tokens.push(normalized)
+    }
+    if (Array.isArray(comment.codes)) {
+      comment.codes.forEach(pushToken)
+    }
+    if (comment.code) {
+      comment.code
+        .split(/[,;\s]+/)
+        .map(part => part.trim())
+        .forEach(pushToken)
+    }
+    if (comment.text) {
+      for (const match of comment.text.matchAll(CODE_TOKEN_REGEX)) {
+        pushToken(match[0])
+      }
+    }
+    return tokens
+  }, [])
+
+  const getCategoryColor = React.useCallback((label: string, macroKey?: MacroKey | null) => {
+    const override = categoryColors[label]
+    if (override) return override
+    if (macroKey && MACRO_INFO[macroKey]) return MACRO_INFO[macroKey].color
+    return defaultColorForLabel(label)
+  }, [categoryColors])
 
   const paragraphs = useMemo(() => {
     if (!data) return [] as { filename: string; text: string; highlights: Highlight[] }[]
@@ -307,7 +452,7 @@ function App() {
       if (savedMap) setColorMap(sanitizeColorMap(JSON.parse(savedMap)))
       if (savedCat) setCatOverride(sanitizeCategoryOverrides(JSON.parse(savedCat)))
   if (savedCatColors) setCategoryColors(JSON.parse(savedCatColors))
-  if (savedCodeMap) setCodeMap(JSON.parse(savedCodeMap))
+  if (savedCodeMap) setCodeMap(prev => ({ ...prev, ...JSON.parse(savedCodeMap) }))
     } catch {}
   }, [])
   React.useEffect(() => {
@@ -370,34 +515,6 @@ function App() {
     }, 600)
     return () => { if (saveTimer.current) window.clearTimeout(saveTimer.current) }
   }, [colorMap, codeMap, categoryColors, catOverride, meta])
-
-  const stats = useMemo(() => {
-    if (!data) return [] as { category: string; count: number }[]
-    const counts: Record<string, number> = {}
-    for (const h of data.highlights) {
-      const color = (h.highlight_color||'').toLowerCase()
-      const rawCat = colorCategoryFromMap(color, colorMap)
-      const cat = color ? (rawCat || colorLabel(color)) : 'non-categorizzato'
-      counts[cat] = (counts[cat] || 0) + 1
-    }
-    return Object.entries(counts).map(([category, count]) => ({ category, count })).sort((a,b)=>b.count-a.count)
-  }, [data, colorMap])
-
-  // Initialize categoryColors for any discovered categories (keep existing values)
-  React.useEffect(() => {
-    const allCats = new Set<string>([...stats.map(s => s.category), 'non-categorizzato'])
-    const next: Record<string,string> = { ...categoryColors }
-    // default palette
-    const palette = ['#ffd43b','#63e6be','#91a7ff','#ff8787','#ffd8a8','#a5d8ff','#b2f2bb','#fcc2d7','#bac8ff','#eebefa']
-    let i = 0
-    allCats.forEach(cat => {
-      if (!next[cat]) {
-        next[cat] = palette[i % palette.length]
-        i++
-      }
-    })
-    if (JSON.stringify(next) !== JSON.stringify(categoryColors)) setCategoryColors(next)
-  }, [stats])
 
   // build a stable signature for each highlight to link list -> inline span
   function sig(h: Highlight) {
@@ -472,7 +589,15 @@ function App() {
 
   // Enrich comments by linking to a matching highlight (via quoted text)
   const commentsEnriched = useMemo(() => {
-    if (!data) return [] as (CommentItem & { highlight?: Highlight; color?: string | null; category?: string; highlightText?: string })[]
+    if (!data) return [] as (CommentItem & {
+      highlight?: Highlight
+      color?: string | null
+      category?: string
+      highlightText?: string
+      macro?: MacroKey | null
+      macroLabel?: string | null
+      codeTokens: string[]
+    })[]
     const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase()
     const highsAll = data.highlights
     return data.comments.map(c => {
@@ -528,15 +653,33 @@ function App() {
           linked = scored[0]?.h
         }
       }
-      const color = linked ? (linked.highlight_color || null) : null
-      const colorKey = (color || '').toLowerCase()
-      const mapped = colorCategoryFromMap(colorKey, colorMap)
-      const defaultCat = colorKey ? (mapped || colorLabel(colorKey)) : 'non-categorizzato'
+      const codeTokens = collectCodes(c)
+      const resolved = codeTokens.map(token => ({
+        token,
+        label: (codeMap[token] || '').trim() || defaultLabelForCode(token),
+        macro: macroFromCode(token),
+      }))
+      const primaryResolved = resolved.find(r => r.label) || resolved[0]
+      let defaultCat = primaryResolved ? primaryResolved.label : 'non-categorizzato'
+      if (!defaultCat) defaultCat = 'non-categorizzato'
       const keyOverride = `${c.filename || ''}::${c.id}`
-      const effectiveCat = catOverride[keyOverride] || defaultCat
-      return { ...c, highlight: linked, color, category: effectiveCat, highlightText: linked?.text || '' }
+      const overrideLabel = (catOverride[keyOverride] || '').trim()
+      const effectiveCat = overrideLabel || defaultCat
+      const macroKey = macroFromLabel(effectiveCat) || primaryResolved?.macro || null
+      const color = getCategoryColor(effectiveCat, macroKey)
+      const macroLabel = macroKey ? MACRO_INFO[macroKey].label : null
+      return {
+        ...c,
+        highlight: linked,
+        color,
+        category: effectiveCat,
+        highlightText: linked?.text || '',
+        macro: macroKey,
+        macroLabel,
+        codeTokens,
+      }
     })
-  }, [data, colorMap, catOverride, highlightsByFile, paragraphsByFile])
+  }, [data, catOverride, collectCodes, codeMap, getCategoryColor, highlightsByFile, paragraphsByFile])
 
   const commentDocs = useMemo(() => {
     const set = new Set<string>()
@@ -544,18 +687,333 @@ function App() {
     return Array.from(set)
   }, [commentsEnriched])
 
+  const highlightCategoryMap = useMemo(() => {
+    const map = new Map<string, { category: string; color: string; macro: MacroKey | null }>()
+    commentsEnriched.forEach(c => {
+      if (c.highlight) {
+        const key = sig(c.highlight)
+        const category = c.category || 'non-categorizzato'
+        const macroKey = c.macro || macroFromLabel(category)
+        const color = getCategoryColor(category, macroKey)
+        map.set(key, { category, color, macro: macroKey })
+      }
+    })
+    return map
+  }, [commentsEnriched, getCategoryColor])
+
+  const resolveHighlightCategory = React.useCallback((h: Highlight) => {
+    const key = sig(h)
+    const mapped = highlightCategoryMap.get(key)
+    if (mapped) return mapped
+    const colorKey = (h.highlight_color || '').toLowerCase()
+    let category = colorKey ? colorCategoryFromMap(colorKey, colorMap) : ''
+    if (!category) {
+      category = colorKey ? colorLabel(colorKey) : 'non-categorizzato'
+    }
+    const macroKey = macroFromLabel(category)
+    const color = getCategoryColor(category, macroKey)
+    return { category, color, macro: macroKey }
+  }, [colorMap, getCategoryColor, highlightCategoryMap])
+
+  const stats = useMemo(() => {
+    if (!commentsEnriched.length) return [] as { category: string; count: number; color: string }[]
+    const counts = new Map<string, { count: number; color: string }>()
+    commentsEnriched.forEach(c => {
+      const category = (c.category || 'non-categorizzato').trim() || 'non-categorizzato'
+      const macroKey = c.macro || macroFromLabel(category)
+      const color = getCategoryColor(category, macroKey)
+      const current = counts.get(category)
+      if (current) {
+        current.count += 1
+      } else {
+        counts.set(category, { count: 1, color })
+      }
+    })
+    return Array.from(counts.entries())
+      .map(([category, info]) => ({ category, count: info.count, color: info.color }))
+      .sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count
+        return a.category.localeCompare(b.category)
+      })
+  }, [commentsEnriched, getCategoryColor])
+
   const commentColors = useMemo(() => {
     const set = new Set<string>()
-    commentsEnriched.forEach(c => c.color && set.add((c.color || '').toLowerCase()))
+    commentsEnriched.forEach(c => {
+      if (c.macro) set.add(c.macro)
+    })
     return Array.from(set)
   }, [commentsEnriched])
+
+  const allCategories = useMemo(() => {
+    const set = new Set<string>()
+    commentsEnriched.forEach(c => {
+      const label = (c.category || 'non-categorizzato').trim() || 'non-categorizzato'
+      set.add(label)
+    })
+    if (!set.size) return [] as string[]
+    return Array.from(set).sort()
+  }, [commentsEnriched])
+
+  const dashboardFiltered = useMemo(() => {
+    let arr = commentsEnriched
+    if (!arr.length) return [] as typeof commentsEnriched
+    if (dbTipo.length) {
+      arr = arr.filter(c => {
+        const fm = c.filename ? meta[c.filename] : undefined
+        return fm ? dbTipo.includes(fm.tipo) : false
+      })
+    }
+    if (dbScuola.length) {
+      const targets = dbScuola.map(s => s.toLowerCase())
+      arr = arr.filter(c => {
+        const fm = c.filename ? meta[c.filename] : undefined
+        return fm ? targets.includes((fm.scuola || '').toLowerCase()) : false
+      })
+    }
+    if (dbRuolo.length) {
+      const targets = dbRuolo.map(s => s.toLowerCase())
+      arr = arr.filter(c => {
+        const fm = c.filename ? meta[c.filename] : undefined
+        return fm ? targets.includes((fm.ruolo || '').toLowerCase()) : false
+      })
+    }
+    if (dbGruppo.length) {
+      const targets = dbGruppo.map(s => s.toLowerCase())
+      arr = arr.filter(c => {
+        const fm = c.filename ? meta[c.filename] : undefined
+        return fm ? targets.includes((fm.gruppo || '').toLowerCase()) : false
+      })
+    }
+    if (dbIntervistatore.length) {
+      const targets = dbIntervistatore.map(s => s.toLowerCase())
+      arr = arr.filter(c => {
+        const fm = c.filename ? meta[c.filename] : undefined
+        return fm ? targets.includes((fm.intervistatore || '').toLowerCase()) : false
+      })
+    }
+    if (dbIntervistato.length) {
+      const targets = dbIntervistato.map(s => s.toLowerCase())
+      arr = arr.filter(c => {
+        const fm = c.filename ? meta[c.filename] : undefined
+        return fm ? targets.includes((fm.intervistato || '').toLowerCase()) : false
+      })
+    }
+    if (dbQuery.trim()) {
+      const q = dbQuery.trim().toLowerCase()
+      arr = arr.filter(c =>
+        (c.text || '').toLowerCase().includes(q) ||
+        (c.quoted || '').toLowerCase().includes(q) ||
+        (c.highlightText || '').toLowerCase().includes(q)
+      )
+    }
+    if (dbCategoryFilter.length) {
+      const targets = new Set(dbCategoryFilter)
+      arr = arr.filter(c => {
+        const label = (c.category || 'non-categorizzato').trim() || 'non-categorizzato'
+        return targets.has(label)
+      })
+    }
+    return arr
+  }, [commentsEnriched, meta, dbTipo, dbScuola, dbRuolo, dbGruppo, dbIntervistatore, dbIntervistato, dbQuery, dbCategoryFilter])
+
+  const dashMacroStats = useMemo(() => {
+    if (!dashboardFiltered.length) return [] as { key: string; label: string; count: number; color: string }[]
+    const counts = new Map<string, { key: string; label: string; count: number; color: string }>()
+    dashboardFiltered.forEach(c => {
+      const macroKey = c.macro || macroFromLabel(c.category || '')
+      const key = macroKey || 'non-categorizzato'
+      const label = macroKey ? `${macroKey} – ${MACRO_INFO[macroKey].label}` : 'non-categorizzato'
+      const color = macroKey ? MACRO_INFO[macroKey].color : '#e9ecef'
+      const current = counts.get(key)
+      if (current) {
+        current.count += 1
+      } else {
+        counts.set(key, { key, label, count: 1, color })
+      }
+    })
+    return Array.from(counts.values()).sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count
+      return a.label.localeCompare(b.label)
+    })
+  }, [dashboardFiltered])
+
+  const dashCategoryStats = useMemo(() => {
+    if (!dashboardFiltered.length) return [] as { label: string; count: number; color: string; macroLabel: string }[]
+    const counts = new Map<string, { label: string; count: number; color: string; macroLabel: string }>()
+    dashboardFiltered.forEach(c => {
+      const label = (c.category || 'non-categorizzato').trim() || 'non-categorizzato'
+      const macroKey = c.macro || macroFromLabel(label)
+      const macroLabel = macroKey ? `${macroKey} – ${MACRO_INFO[macroKey].label}` : '—'
+      const color = getCategoryColor(label, macroKey)
+      const current = counts.get(label)
+      if (current) {
+        current.count += 1
+      } else {
+        counts.set(label, { label, count: 1, color, macroLabel })
+      }
+    })
+    return Array.from(counts.values()).sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count
+      return a.label.localeCompare(b.label)
+    })
+  }, [dashboardFiltered, getCategoryColor])
+
+  type ComparisonSlice = {
+    key: string
+    label: string
+    categories: {
+      macroKey: string
+      macroLabel: string
+      color: string
+      count: number
+      sub: { label: string; count: number }[]
+    }[]
+    total: number
+  }
+
+  const groupByField = React.useCallback((field: 'scuola' | 'ruolo') => {
+    const groups = new Map<string, typeof dashboardFiltered>()
+    dashboardFiltered.forEach(c => {
+      const fm = c.filename ? meta[c.filename] : undefined
+      const raw = fm ? (fm[field] || '—') : '—'
+      const key = raw.trim() || '—'
+      ;(groups.get(key) || groups.set(key, []).get(key)!)
+    })
+    return groups
+  }, [dashboardFiltered, meta])
+
+  const dashCompareScuole = useMemo(() => {
+    if (!dashboardFiltered.length) return [] as ComparisonSlice[]
+    const bySchool = new Map<string, typeof dashboardFiltered>()
+    dashboardFiltered.forEach(c => {
+      const fm = c.filename ? meta[c.filename] : undefined
+      const school = (fm?.scuola || '—').trim() || '—'
+      if (!bySchool.has(school)) bySchool.set(school, [])
+      bySchool.get(school)!.push(c)
+    })
+    const slices: ComparisonSlice[] = []
+    bySchool.forEach((items, school) => {
+      const macroMap = new Map<string, { macroKey: string; macroLabel: string; color: string; count: number; sub: Map<string, number> }>()
+      items.forEach(item => {
+        const macroKey = item.macro || macroFromLabel(item.category || '') || 'NC'
+        const macroInfo = macroKey !== 'NC' ? MACRO_INFO[macroKey] : { label: 'non-categorizzato', color: '#e9ecef' }
+        if (!macroMap.has(macroKey)) {
+          macroMap.set(macroKey, {
+            macroKey,
+            macroLabel: macroKey !== 'NC' ? `${macroKey} – ${macroInfo.label}` : 'non-categorizzato',
+            color: macroInfo.color,
+            count: 0,
+            sub: new Map<string, number>(),
+          })
+        }
+        const entry = macroMap.get(macroKey)!
+        entry.count += 1
+        const label = (item.category || 'non-categorizzato').trim() || 'non-categorizzato'
+        entry.sub.set(label, (entry.sub.get(label) || 0) + 1)
+      })
+      const categories = Array.from(macroMap.values()).map(macro => ({
+        macroKey: macro.macroKey,
+        macroLabel: macro.macroLabel,
+        color: macro.color,
+        count: macro.count,
+        sub: Array.from(macro.sub.entries()).map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count),
+      })).sort((a, b) => b.count - a.count)
+      slices.push({ key: school, label: school, categories, total: items.length })
+    })
+    return slices.sort((a, b) => b.total - a.total)
+  }, [dashboardFiltered, meta])
+
+  const dashCompareRuoli = useMemo(() => {
+    if (!dashboardFiltered.length) return [] as ComparisonSlice[]
+    const byRole = new Map<string, typeof dashboardFiltered>()
+    dashboardFiltered.forEach(c => {
+      const fm = c.filename ? meta[c.filename] : undefined
+      const role = (fm?.ruolo || '—').trim() || '—'
+      if (!byRole.has(role)) byRole.set(role, [])
+      byRole.get(role)!.push(c)
+    })
+    const slices: ComparisonSlice[] = []
+    byRole.forEach((items, role) => {
+      const macroMap = new Map<string, { macroKey: string; macroLabel: string; color: string; count: number; sub: Map<string, number> }>()
+      items.forEach(item => {
+        const macroKey = item.macro || macroFromLabel(item.category || '') || 'NC'
+        const macroInfo = macroKey !== 'NC' ? MACRO_INFO[macroKey] : { label: 'non-categorizzato', color: '#e9ecef' }
+        if (!macroMap.has(macroKey)) {
+          macroMap.set(macroKey, {
+            macroKey,
+            macroLabel: macroKey !== 'NC' ? `${macroKey} – ${macroInfo.label}` : 'non-categorizzato',
+            color: macroInfo.color,
+            count: 0,
+            sub: new Map<string, number>(),
+          })
+        }
+        const entry = macroMap.get(macroKey)!
+        entry.count += 1
+        const label = (item.category || 'non-categorizzato').trim() || 'non-categorizzato'
+        entry.sub.set(label, (entry.sub.get(label) || 0) + 1)
+      })
+      const categories = Array.from(macroMap.values()).map(macro => ({
+        macroKey: macro.macroKey,
+        macroLabel: macro.macroLabel,
+        color: macro.color,
+        count: macro.count,
+        sub: Array.from(macro.sub.entries()).map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count),
+      })).sort((a, b) => b.count - a.count)
+      slices.push({ key: role, label: role, categories, total: items.length })
+    })
+    return slices.sort((a, b) => b.total - a.total)
+  }, [dashboardFiltered, meta])
+
+  const compareSlices = useMemo(() => (compareMode === 'scuola' ? dashCompareScuole : dashCompareRuoli), [compareMode, dashCompareScuole, dashCompareRuoli])
+  const compareOptions = useMemo(() => compareSlices.map(slice => ({ value: slice.key, label: slice.label })), [compareSlices])
+
+  React.useEffect(() => {
+    if (!compareSlices.length) {
+      if (compareSelectionA) setCompareSelectionA('')
+      if (compareSelectionB) setCompareSelectionB('')
+      return
+    }
+    if (!compareSelectionA || !compareSlices.some(s => s.key === compareSelectionA)) {
+      setCompareSelectionA(compareSlices[0].key)
+    }
+    let desiredB = compareSelectionB
+    if (!desiredB || !compareSlices.some(s => s.key === desiredB)) {
+      desiredB = compareSlices.find(s => s.key !== compareSlices[0].key)?.key || compareSlices[0].key
+    }
+    if (compareSelectionA && desiredB === compareSelectionA && compareSlices.length > 1) {
+      desiredB = compareSlices.find(s => s.key !== compareSelectionA)?.key || desiredB
+    }
+    if (desiredB !== compareSelectionB) {
+      setCompareSelectionB(desiredB)
+    }
+  }, [compareSlices, compareSelectionA, compareSelectionB])
+
+  const compareSliceA = useMemo(() => compareSlices.find(s => s.key === compareSelectionA), [compareSlices, compareSelectionA])
+  const compareSliceB = useMemo(() => compareSlices.find(s => s.key === compareSelectionB), [compareSlices, compareSelectionB])
 
   const filteredComments = useMemo(() => {
     let arr = commentsEnriched
     if (fDoc.length) arr = arr.filter(c => fDoc.includes((c.filename || '')))
-    if (fCode.length) arr = arr.filter(c => fCode.includes((c.code || '').toLowerCase()))
-    if (fColor.length) arr = arr.filter(c => fColor.includes((c.color || '').toLowerCase()))
-    if (fCategory.length) arr = arr.filter(c => fCategory.includes((c.category || '').toLowerCase()))
+    if (fCode.length) {
+      arr = arr.filter(c => {
+        const tokensUpper = (c.codeTokens || []).map(t => t.toUpperCase())
+        if (!tokensUpper.length) return false
+        return fCode.some(code => tokensUpper.includes(code.toUpperCase()))
+      })
+    }
+    if (fColor.length) {
+      arr = arr.filter(c => {
+        if (!c.macro) return false
+        return fColor.includes(c.macro)
+      })
+    }
+    if (fCategory.length) {
+      arr = arr.filter(c => {
+        const label = (c.category || 'non-categorizzato').trim() || 'non-categorizzato'
+        return fCategory.includes(label)
+      })
+    }
     // metadata-based filters by filename
     if (fIntervistatore.length) arr = arr.filter(c => {
       const fm = c.filename ? meta[c.filename] : undefined
@@ -594,8 +1052,10 @@ function App() {
 
   const commentCodes = useMemo(() => {
     const set = new Set<string>()
-    commentsEnriched.forEach(c => c.code && set.add((c.code||'').toLowerCase()))
-    return Array.from(set)
+    commentsEnriched.forEach(c => {
+      (c.codeTokens || []).forEach(token => set.add(token.toUpperCase()))
+    })
+    return Array.from(set).sort()
   }, [commentsEnriched])
 
   // CSV export (array -> CSV blob)
@@ -618,17 +1078,131 @@ function App() {
     a.click()
     URL.revokeObjectURL(url)
   }
+
+  function resetDashboardFilters() {
+    setDbTipo([])
+    setDbScuola([])
+    setDbRuolo([])
+    setDbGruppo([])
+    setDbIntervistatore([])
+    setDbIntervistato([])
+    setDbQuery('')
+    setDbCategoryFilter([])
+  }
+
+  const renderHistogram = (items: { label: string; count: number; color: string; extra?: string }[]) => {
+    if (!items.length) return <div style={{ color: '#666' }}>Nessun dato.</div>
+    const max = Math.max(...items.map(i => i.count), 1)
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {items.map(item => {
+          const width = 12 + Math.max(12, Math.round((item.count / max) * 220))
+          return (
+            <div key={item.label} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ minWidth: 32, padding: '2px 8px', borderRadius: 999, background: '#e9ecef', fontVariantNumeric: 'tabular-nums', textAlign: 'center' }}>{item.count}</span>
+                <span>{item.extra ? `${item.extra} · ${item.label}` : item.label}</span>
+              </div>
+              <div style={{ height: 12, background: '#f1f3f5', borderRadius: 6, overflow: 'hidden' }}>
+                <div style={{ width, height: '100%', background: item.color, transition: 'width 0.3s ease' }} />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  const renderPie = (items: { label: string; count: number; color: string; extra?: string }[]) => {
+    if (!items.length) return <div style={{ color: '#666' }}>Nessun dato.</div>
+    const total = items.reduce((sum, item) => sum + item.count, 0)
+    if (!total) return <div style={{ color: '#666' }}>Nessun dato.</div>
+    let acc = 0
+    const segments = items.map(item => {
+      const start = (acc / total) * 100
+      acc += item.count
+      const end = (acc / total) * 100
+      return `${item.color} ${start.toFixed(2)}% ${end.toFixed(2)}%`
+    })
+    const gradient = `conic-gradient(${segments.join(', ')})`
+    return (
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ width: 180, height: 180, borderRadius: '50%', background: gradient, border: '1px solid #dee2e6' }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {items.map(item => (
+            <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ minWidth: 32, padding: '2px 8px', borderRadius: 999, background: '#e9ecef', fontVariantNumeric: 'tabular-nums', textAlign: 'center' }}>{item.count}</span>
+              <span style={{ width: 14, height: 14, borderRadius: 4, background: item.color, border: '1px solid #ced4da' }} />
+              <span>{item.extra ? `${item.extra} · ${item.label}` : item.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  const renderChart = (items: { label: string; count: number; color: string; extra?: string }[], chartType: 'istogramma' | 'torta') => {
+    return chartType === 'torta' ? renderPie(items) : renderHistogram(items)
+  }
+
+  const renderComparisonPanel = (title: string, slice?: ComparisonSlice) => {
+    if (!slice) {
+      return (
+        <div style={{ border: '1px dashed #ced4da', borderRadius: 8, padding: 16, color: '#666', minHeight: 180 }}>
+          Seleziona {title.toLowerCase()} da confrontare.
+        </div>
+      )
+    }
+    return (
+      <div style={{ border: '1px solid #f1f3f5', borderRadius: 8, padding: 16, background: '#fff', boxShadow: dbCompareLayout === 'columns' ? '0 1px 3px rgba(15, 23, 42, 0.08)' : 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+          <span style={{ minWidth: 40, padding: '4px 10px', borderRadius: 999, background: '#dee2e6', fontWeight: 600, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{slice.total}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={{ fontWeight: 600, color: '#212529' }}>{slice.label}</div>
+            <span style={{ fontSize: 11, color: '#495057' }}>Commenti totali</span>
+          </div>
+        </div>
+        {slice.categories.length === 0 && <div style={{ color: '#666' }}>Nessuna categoria disponibile.</div>}
+        {slice.categories.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {slice.categories.map(cat => (
+              <div key={`${slice.key}-${cat.macroKey}`} style={{ border: '1px solid #e9ecef', borderRadius: 6, padding: 10, background: '#fafafb' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: cat.sub.length ? 8 : 0 }}>
+                  <span style={{ minWidth: 32, padding: '2px 8px', borderRadius: 999, background: '#e9ecef', fontVariantNumeric: 'tabular-nums', textAlign: 'center' }}>{cat.count}</span>
+                  <span style={{ width: 12, height: 12, borderRadius: 4, background: cat.color, border: '1px solid #ced4da' }} />
+                  <strong>{cat.macroLabel}</strong>
+                </div>
+                {cat.sub.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 12 }}>
+                    {cat.sub.map(sub => (
+                      <div key={`${slice.key}-${cat.macroKey}-${sub.label}`} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                        <span style={{ minWidth: 28, padding: '1px 6px', borderRadius: 6, background: '#f1f3f5', fontVariantNumeric: 'tabular-nums', textAlign: 'center' }}>{sub.count}</span>
+                        <span>{sub.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
   function exportComments(rows: (typeof commentsEnriched)[number][]) {
     const mapped = rows.map(c => {
       const m = c.filename ? meta[c.filename] : undefined
+      const codeString = (c.codeTokens && c.codeTokens.length) ? c.codeTokens.join(', ') : (c.code || '')
+      const macroLabel = c.macro ? `${c.macro} – ${MACRO_INFO[c.macro].label}` : ''
       return {
         filename: c.filename || '',
         id: c.id,
         author: c.author,
         date: c.date,
-        code: c.code || '',
+        codes: codeString,
         category: c.category || '',
-        color: colorLabel(c.color),
+        macro: macroLabel,
+        color_hex: c.color || '',
         quoted: c.quoted || '',
         highlighted: c.highlightText || c.highlight?.text || '',
         comment: c.text || '',
@@ -647,14 +1221,17 @@ function App() {
   function exportCommentsXLSX(rows: (typeof commentsEnriched)[number][]) {
     const mapped = rows.map(c => {
       const m = c.filename ? meta[c.filename] : undefined
+      const codeString = (c.codeTokens && c.codeTokens.length) ? c.codeTokens.join(', ') : (c.code || '')
+      const macroLabel = c.macro ? `${c.macro} – ${MACRO_INFO[c.macro].label}` : ''
       return {
         File: c.filename || '',
         ID: c.id,
         Autore: c.author,
         Data: c.date,
-        Codice: c.code || '',
+        Codici: codeString,
         Categoria: c.category || '',
-        Colore: colorLabel(c.color),
+        Macro: macroLabel,
+        "Colore hex": c.color || '',
         "Testo selezionato": c.quoted || '',
         "Testo evidenziato": c.highlightText || c.highlight?.text || '',
         Commento: c.text || '',
@@ -678,6 +1255,7 @@ function App() {
 
   const optionsFromMeta = useMemo(() => {
     const docs = Object.keys(meta)
+    const setTipo = new Set<string>()
     const setI = new Set<string>()
     const setT = new Set<string>()
     const setR = new Set<string>()
@@ -685,6 +1263,7 @@ function App() {
     const setG = new Set<string>()
     for (const d of docs) {
       const fm = meta[d]
+      if (fm?.tipo) setTipo.add(fm.tipo)
       if (fm?.intervistatore) setI.add(fm.intervistatore)
       if (fm?.intervistato) setT.add(fm.intervistato)
       if (fm?.ruolo) setR.add(fm.ruolo)
@@ -692,6 +1271,7 @@ function App() {
       if (fm?.gruppo) setG.add(fm.gruppo)
     }
     return {
+      tipi: Array.from(setTipo),
       intervistatori: Array.from(setI),
       intervistati: Array.from(setT),
       ruoli: Array.from(setR),
@@ -779,6 +1359,9 @@ function App() {
           <button onClick={() => setTab('dashboard')} aria-label="Dashboard" title="Dashboard" style={{ padding: '6px 10px', borderRadius: 6, border: tab==='dashboard' ? '2px solid #444' : '1px solid #ddd', background: tab==='dashboard' ? '#f0f0f0' : '#fff', display:'inline-flex', alignItems:'center', justifyContent:'center' }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 13h8V3H3v10Zm10 8h8V3h-8v18ZM3 21h8v-6H3v6Z" fill="currentColor"/></svg>
           </button>
+          <button onClick={() => setTab('legenda')} aria-label="Legenda" title="Legenda" style={{ padding: '6px 10px', borderRadius: 6, border: tab==='legenda' ? '2px solid #444' : '1px solid #ddd', background: tab==='legenda' ? '#f0f0f0' : '#fff', display:'inline-flex', alignItems:'center', justifyContent:'center' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3a9 9 0 1 0 9 9 9.01 9.01 0 0 0-9-9Zm0 4a1.2 1.2 0 1 1 0 2.4A1.2 1.2 0 0 1 12 7Zm1 10h-2v-1h1v-3h-1v-1h2v4h1v1Z" fill="currentColor"/></svg>
+          </button>
           <button onClick={() => setTab('impostazioni')} aria-label="Impostazioni" title="Impostazioni" style={{ padding: '6px 10px', borderRadius: 6, border: tab==='impostazioni' ? '2px solid #444' : '1px solid #ddd', background: tab==='impostazioni' ? '#f0f0f0' : '#fff', display:'inline-flex', alignItems:'center', justifyContent:'center' }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" strokeWidth="2"/><path d="M19.4 15a7.96 7.96 0 0 0 .08-1 7.96 7.96 0 0 0-.08-1l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.6-.22l-2.49 1a8.14 8.14 0 0 0-1.73-1L14.5 2.5a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 0-.5.5L9 5.03c-.6.24-1.17.56-1.7.94l-2.5-1a.5.5 0 0 0-.6.22l-2 3.46a.5.5 0 0 0 .12.64L4.4 12a7.96 7.96 0 0 0-.08 1 7.96 7.96 0 0 0 .08 1l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .6.22l2.49-1c.53.38 1.1.7 1.7.94L9.5 23.5a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5L15 20.97c.6-.24 1.17-.56 1.7-.94l2.49 1a.5.5 0 0 0 .6-.22l2-3.46a.5.5 0 0 0-.12-.64L19.4 15Z" stroke="currentColor" strokeWidth="1.5"/></svg>
           </button>
@@ -792,6 +1375,64 @@ function App() {
   <div style={{ flex: 1, padding: '16px 24px', overflowY: 'auto', overflowX: 'auto', borderRight: tab==='viewer' ? '1px solid #eee' : 'none' }}>
           {error && <div style={{ color: 'red' }}>{error}</div>}
           {loading && <div>Caricamento…</div>}
+
+            {tab === 'legenda' && (
+              <>
+                <h3>Legenda categorie</h3>
+                <p style={{ maxWidth: 680, color: '#495057' }}>
+                  I colori mostrati nell’interfaccia seguono la macro-categoria associata a ciascun codice. L’etichetta scelta per un commento prevale sul colore originale presente nel file DOCX.
+                </p>
+                <h4>Macro categorie</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 18 }}>
+                  {Object.entries(MACRO_INFO).map(([macro, info]) => (
+                    <div key={macro} style={{ border: '1px solid #e9ecef', borderRadius: 8, padding: 12, background: '#fff', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 16, height: 16, borderRadius: 4, background: info.color, border: '1px solid #ced4da' }} />
+                        <strong>{info.label}</strong>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#495057' }}>Codice macro: <code>{macro}</code></div>
+                      <div style={{ fontSize: 12, color: '#495057' }}>Colore: <code>{info.color}</code></div>
+                    </div>
+                  ))}
+                </div>
+                {Object.entries(CODE_LIST_BY_TYPE).map(([tipo, codes]) => (
+                  <div key={tipo} style={{ marginBottom: 28 }}>
+                    <h4 style={{ marginBottom: 6 }}>Codici {tipo}</h4>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', border: '1px solid #e9ecef', borderRadius: 8, overflow: 'hidden' }}>
+                      <thead style={{ background: '#f1f3f5' }}>
+                        <tr>
+                          <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #dee2e6' }}>Codice</th>
+                          <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #dee2e6' }}>Sotto categoria</th>
+                          <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #dee2e6' }}>Macro</th>
+                          <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #dee2e6' }}>Colore</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {codes.map(code => {
+                          const normalized = normalizeCodeToken(code)
+                          const info = CODE_INFO[normalized]
+                          const label = info ? info.label : (codeMap[normalized] || defaultLabelForCode(normalized))
+                          const macroKey = info ? info.macro : macroFromCode(normalized)
+                          const macroLabel = macroKey ? MACRO_INFO[macroKey].label : '—'
+                          const color = getCategoryColor(label, macroKey)
+                          return (
+                            <tr key={`${tipo}-${code}`}>
+                              <td style={{ padding: 8, borderBottom: '1px solid #f1f3f5' }}><code>{normalized}</code></td>
+                              <td style={{ padding: 8, borderBottom: '1px solid #f1f3f5' }}>{label}</td>
+                              <td style={{ padding: 8, borderBottom: '1px solid #f1f3f5' }}>{macroLabel}</td>
+                              <td style={{ padding: 8, borderBottom: '1px solid #f1f3f5', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ width: 14, height: 14, borderRadius: 4, border: '1px solid #ced4da', background: color }} />
+                                <code>{color}</code>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </>
+            )}
 
             {tab === 'impostazioni' && (
               <>
@@ -813,17 +1454,14 @@ function App() {
                 <h4 style={{ marginBottom: 6 }}>Mappatura: XX_X → Etichetta</h4>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
                   {(() => {
-                    const tokens = Array.from(new Set((data?.comments || []).flatMap(c => (c.code || '')
-                      .split(/[,;\s]+/)
-                      .map(t => t.trim())
-                      .filter(Boolean))))
+                    const tokens = Array.from(new Set([...commentCodes, ...Object.keys(DEFAULT_CODE_MAP)])).sort()
                     return tokens.map(t => (
                       <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid #eee', borderRadius: 6, padding: 6 }}>
-                        <span style={{ minWidth: 80 }}>{t}</span>
+                        <span style={{ minWidth: 120 }}>{t}</span>
                         <input
                           value={codeMap[t] || ''}
                           onChange={e => setCodeMap({ ...codeMap, [t]: e.target.value })}
-                          placeholder={t}
+                          placeholder={defaultLabelForCode(t)}
                         />
                       </div>
                     ))
@@ -837,9 +1475,9 @@ function App() {
                     'non-categorizzato',
                   ])).map(cat => (
                     <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid #eee', borderRadius: 6, padding: 6 }}>
-                      <span style={{ width: 12, height: 12, background: categoryColors[cat] || '#ddd', display: 'inline-block', border: '1px solid #ccc' }} />
+                      <span style={{ width: 12, height: 12, background: getCategoryColor(cat, macroFromLabel(cat)), display: 'inline-block', border: '1px solid #ccc' }} />
                       <span style={{ minWidth: 120 }}>{cat}</span>
-                      <input type="color" value={categoryColors[cat] || '#dddddd'} onChange={e => setCategoryColors({ ...categoryColors, [cat]: e.target.value })} />
+                      <input type="color" value={categoryColors[cat] || getCategoryColor(cat, macroFromLabel(cat))} onChange={e => setCategoryColors({ ...categoryColors, [cat]: e.target.value })} />
                       <button onClick={() => setCategoryColors(prev => { const n = { ...prev }; delete n[cat]; return n })}>Reset</button>
                     </div>
                   ))}
@@ -870,10 +1508,9 @@ function App() {
                   if (cursor < start) {
                     chunks.push(<span key={`t-${cursor}`}>{p.text.slice(cursor, start)}</span>)
                   }
-          const color = (h.highlight_color || '').toLowerCase()
-          const rawCat = colorCategoryFromMap(color, colorMap)
-          const cat = color ? (rawCat || colorLabel(color)) : 'non-categorizzato'
-          const labelColor = categoryColors[cat] || color || 'yellow'
+          const resolved = resolveHighlightCategory(h)
+          const cat = resolved.category || 'non-categorizzato'
+          const labelColor = resolved.color || '#f8f9fa'
                   chunks.push(
                     <span
                       key={`h-${start}`}
@@ -910,7 +1547,10 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <select multiple value={fCode} onChange={e => setFCode(readMulti(e))} size={Math.min(6, Math.max(3, commentCodes.length))}>
-                    {commentCodes.map(c => (<option key={c} value={c}>{c}</option>))}
+                    {commentCodes.map(c => {
+                      const label = (codeMap[c] || '').trim() || defaultLabelForCode(c)
+                      return (<option key={c} value={c}>{`${c} – ${label}`}</option>)
+                    })}
                   </select>
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button onClick={() => setFCode(commentCodes)}>Tutti</button>
@@ -919,7 +1559,10 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <select multiple value={fColor} onChange={e => setFColor(readMulti(e))} size={Math.min(6, Math.max(3, commentColors.length))}>
-                    {commentColors.map(c => (<option key={c} value={c}>{colorLabel(c)}</option>))}
+                    {commentColors.map(c => {
+                      const info = (MACRO_INFO as Record<string, { label: string }>)[c]
+                      return (<option key={c} value={c}>{info ? `${c} – ${info.label}` : c}</option>)
+                    })}
                   </select>
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button onClick={() => setFColor(commentColors)}>Tutti</button>
@@ -927,7 +1570,7 @@ function App() {
                   </div>
                   </div>
                   {(() => {
-                    const cats = Array.from(new Set(commentsEnriched.map(c => (c.category || 'non-categorizzato').toLowerCase())))
+                    const cats = Array.from(new Set(commentsEnriched.map(c => (c.category || 'non-categorizzato').trim() || 'non-categorizzato'))).sort()
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <select multiple value={fCategory} onChange={e => setFCategory(readMulti(e))} size={Math.min(6, Math.max(3, cats.length))}>
@@ -994,9 +1637,8 @@ function App() {
 
                 {filteredComments.length === 0 && <div>Nessun commento.</div>}
                 {filteredComments.map((c, idx) => {
-                  const color = (c.color || '').toLowerCase()
-                  const cat = c.category || '—'
-                  const labelColor = categoryColors[cat] || color || '#bbb'
+                  const cat = (c.category || 'non-categorizzato').trim() || 'non-categorizzato'
+                  const labelColor = getCategoryColor(cat, c.macro || macroFromLabel(cat))
                   const highlightedFull = (c.highlightText || c.highlight?.text || '').trim()
                   const quotedText = (c.quoted || '').trim()
                   const showFullHighlight = highlightedFull && highlightedFull !== quotedText
@@ -1012,7 +1654,7 @@ function App() {
                         <div style={{ fontSize: 13, color: '#333' }}>Testo evidenziato: <em>“{highlightedFull}”</em></div>
                       )}
                       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 6 }}>
-                        <span style={{ fontSize: 12 }}>Codice: <strong>{c.code || '—'}</strong></span>
+                        <span style={{ fontSize: 12 }}>Codici: <strong>{(c.codeTokens && c.codeTokens.length) ? c.codeTokens.join(', ') : (c.code || '—')}</strong></span>
                         <span style={{ fontSize: 12 }}>Etichetta: <strong>{cat}</strong></span>
                         {c.highlight && (
                           <button onClick={() => jumpTo(c.highlight!)} style={{ marginLeft: 'auto' }}>Vai al testo</button>
@@ -1046,7 +1688,10 @@ function App() {
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <select multiple value={kCode} onChange={e => setKCode(readMulti(e))} size={Math.min(6, Math.max(3, commentCodes.length))}>
-                        {commentCodes.map(c => (<option key={c} value={c}>{c}</option>))}
+                        {commentCodes.map(c => {
+                          const label = (codeMap[c] || '').trim() || defaultLabelForCode(c)
+                          return (<option key={c} value={c}>{`${c} – ${label}`}</option>)
+                        })}
                       </select>
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button onClick={() => setKCode(commentCodes)}>Tutti</button>
@@ -1055,7 +1700,10 @@ function App() {
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <select multiple value={kColor} onChange={e => setKColor(readMulti(e))} size={Math.min(6, Math.max(3, commentColors.length))}>
-                        {commentColors.map(c => (<option key={c} value={c}>{colorLabel(c)}</option>))}
+                        {commentColors.map(c => {
+                          const info = (MACRO_INFO as Record<string, { label: string }>)[c]
+                          return (<option key={c} value={c}>{info ? `${c} – ${info.label}` : c}</option>)
+                        })}
                       </select>
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button onClick={() => setKColor(commentColors)}>Tutti</button>
@@ -1063,7 +1711,7 @@ function App() {
                       </div>
                     </div>
                     {(() => {
-                      const cats = Array.from(new Set(commentsEnriched.map(c => (c.category || 'non-categorizzato').toLowerCase())))
+                      const cats = Array.from(new Set(commentsEnriched.map(c => (c.category || 'non-categorizzato').trim() || 'non-categorizzato'))).sort()
                       return (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                           <select multiple value={kCategory} onChange={e => setKCategory(readMulti(e))} size={Math.min(6, Math.max(3, cats.length))}>
@@ -1128,9 +1776,25 @@ function App() {
                   // Filter items (mirror Commenti)
                   let items = commentsEnriched
                   if (kDoc.length) items = items.filter(c => kDoc.includes(c.filename || ''))
-                  if (kCode.length) items = items.filter(c => kCode.includes((c.code || '').toLowerCase()))
-                  if (kColor.length) items = items.filter(c => kColor.includes((c.color || '').toLowerCase()))
-                  if (kCategory.length) items = items.filter(c => kCategory.includes((c.category || '').toLowerCase()))
+                  if (kCode.length) {
+                    items = items.filter(c => {
+                      const toks = (c.codeTokens || []).map(t => t.toUpperCase())
+                      if (!toks.length) return false
+                      return kCode.some(code => toks.includes(code.toUpperCase()))
+                    })
+                  }
+                  if (kColor.length) {
+                    items = items.filter(c => {
+                      if (!c.macro) return false
+                      return kColor.includes(c.macro)
+                    })
+                  }
+                  if (kCategory.length) {
+                    items = items.filter(c => {
+                      const label = (c.category || 'non-categorizzato').trim() || 'non-categorizzato'
+                      return kCategory.includes(label)
+                    })
+                  }
                   if (kIntervistatore.length) items = items.filter(c => {
                     const fm = c.filename ? meta[c.filename] : undefined
                     return fm ? kIntervistatore.map(s=>s.toLowerCase()).includes((fm.intervistatore||'').toLowerCase()) : false
@@ -1184,16 +1848,14 @@ function App() {
                     const tokenSet = new Set<string>()
                     const tokenMap: Record<string, typeof items> = {}
                     const noToken: typeof items = []
-                    const split = (s: string) => s.split(/[,;\s]+/).map(t => t.trim()).filter(Boolean)
                     for (const c of items) {
-                      const raw = c.code ? split(c.code) : []
-                      const tokens = raw.map(t => codeMap[t] || t)
+                      const tokens = c.codeTokens && c.codeTokens.length ? c.codeTokens : []
                       if (tokens.length === 0) {
                         noToken.push(c)
                       } else {
-                        for (const t of tokens) {
-                          tokenSet.add(t)
-                          ;(tokenMap[t] ||= []).push(c)
+                        for (const token of tokens) {
+                          tokenSet.add(token)
+                          ;(tokenMap[token] ||= []).push(c)
                         }
                       }
                     }
@@ -1205,43 +1867,63 @@ function App() {
 
                   return (
                     <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', overflowX: 'auto' }}>
-                      {columns.map(col => (
-                        <div key={col}
-                          style={{ minWidth: 260, background: '#fff', border: '1px solid #e9ecef', borderRadius: 8, padding: 10 }}>
-                          <div style={{ fontWeight: 700, marginBottom: 8 }}>{col} <span style={{ color: '#868e96' }}>({(groups[col]||[]).length})</span></div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                            {(groups[col] || []).map(c => (
-                              <div key={c.id}
-                                style={{ border: '1px solid #eee', borderLeft: `4px solid ${categoryColors[c.category || 'non-categorizzato'] || '#bbb'}`, padding: 8, borderRadius: 6, background: '#f8f9fa' }}>
-                                <div style={{ fontSize: 12, color: '#555' }}>{c.filename}</div>
-                                <div style={{ fontWeight: 600, margin: '4px 0' }}>{c.text || '—'}</div>
-                                {c.quoted && <div style={{ fontSize: 12, color: '#495057' }}>“{c.quoted}”</div>}
-                                {(() => {
-                                  const highlightedFull = (c.highlightText || c.highlight?.text || '').trim()
-                                  const quotedText = (c.quoted || '').trim()
-                                  if (!highlightedFull || highlightedFull === quotedText) return null
-                                  return <div style={{ fontSize: 12, color: '#495057' }}>Testo evidenziato: “{highlightedFull}”</div>
-                                })()}
-                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-                                  {/* Category badge with category label color */}
-                                  <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 999, background: (categoryColors[c.category || 'non-categorizzato'] || '#e9ecef'), color: '#212529' }}>{c.category || 'non-categorizzato'}</span>
-                                  {/* Additional labels from codes like XX_X */}
-                                  {(() => {
-                                    const tokens = (c.code || '')
-                                      .split(/[,;\s]+/)
-                                      .map(t => t.trim())
-                                      .filter(Boolean)
-                                    return tokens.map(t => (
-                                      <span key={t} style={{ fontSize: 11, padding: '2px 6px', borderRadius: 999, background: '#fff', border: '1px solid #dee2e6', color: '#343a40' }}>{t}</span>
-                                    ))
-                                  })()}
-                                </div>
-                                {c.highlight && <button onClick={() => jumpTo(c.highlight!)} style={{ marginTop: 6 }}>Vai al testo</button>}
-                              </div>
-                            ))}
+                      {columns.map(col => {
+                        const header = col === '—'
+                          ? '—'
+                          : `${col} – ${(codeMap[col] || '').trim() || defaultLabelForCode(col)}`
+                        return (
+                          <div key={col}
+                            style={{ minWidth: 260, background: '#fff', border: '1px solid #e9ecef', borderRadius: 8, padding: 10 }}>
+                            <div style={{ fontWeight: 700, marginBottom: 8 }}>{header} <span style={{ color: '#868e96' }}>({(groups[col]||[]).length})</span></div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              {(groups[col] || []).map(c => {
+                                const categoryLabel = (c.category || 'non-categorizzato').trim() || 'non-categorizzato'
+                                const macroKey = c.macro || macroFromLabel(categoryLabel)
+                                const badgeColor = getCategoryColor(categoryLabel, macroKey)
+                                return (
+                                  <div key={c.id}
+                                    style={{ border: '1px solid #eee', borderLeft: `4px solid ${badgeColor}`, padding: 8, borderRadius: 6, background: '#f8f9fa' }}>
+                                    <div style={{ fontSize: 12, color: '#555' }}>{c.filename}</div>
+                                    <div style={{ fontWeight: 600, margin: '4px 0' }}>{c.text || '—'}</div>
+                                    {c.quoted && <div style={{ fontSize: 12, color: '#495057' }}>“{c.quoted}”</div>}
+                                    {(() => {
+                                      const highlightedFull = (c.highlightText || c.highlight?.text || '').trim()
+                                      const quotedText = (c.quoted || '').trim()
+                                      if (!highlightedFull || highlightedFull === quotedText) return null
+                                      return <div style={{ fontSize: 12, color: '#495057' }}>Testo evidenziato: “{highlightedFull}”</div>
+                                    })()}
+                                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                                      <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 999, background: badgeColor, color: '#212529' }}>{categoryLabel}</span>
+                                      {(c.codeTokens && c.codeTokens.length ? c.codeTokens : (c.code ? [c.code] : [])).map(token => {
+                                        const label = (codeMap[token] || '').trim() || defaultLabelForCode(token)
+                                        return (
+                                          <span key={token} style={{ fontSize: 11, padding: '2px 6px', borderRadius: 999, background: '#fff', border: '1px solid #dee2e6', color: '#343a40' }}>{`${token} – ${label}`}</span>
+                                        )
+                                      })}
+                                    </div>
+                                    <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                                      {c.highlight && <button onClick={() => jumpTo(c.highlight!)} style={{ fontSize: 12 }}>Vai al testo</button>}
+                                      {c.highlight && (
+                                        <button onClick={() => scheduleJump({
+                                          filename: c.highlight?.filename || c.filename || '',
+                                          type: 'highlight',
+                                          highlight_color: c.highlight?.highlight_color || null,
+                                          text: c.highlight?.text || c.highlightText || '',
+                                          context: c.highlight?.context || c.quoted || '',
+                                          paragraph: c.highlight?.paragraph || '',
+                                          offset_start: c.highlight?.offset_start || 0,
+                                          offset_end: c.highlight?.offset_end || 0,
+                                          para_index: c.highlight?.para_index || null,
+                                        } as Highlight)} style={{ fontSize: 12 }}>Evidenza</button>
+                                      )}
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   )
                 })()}
@@ -1412,38 +2094,214 @@ function App() {
             {tab === 'dashboard' && (
               <>
                 <h3>Dashboard</h3>
-                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                  <div style={{ flex: '1 1 260px', background: '#fff', border: '1px solid #eee', borderRadius: 8, padding: 12 }}>
-                    <h4 style={{ marginTop: 0 }}>Categorie</h4>
-                    {stats.length === 0 && <div style={{ color: '#666' }}>Nessun dato</div>}
-                    {stats.map(s => (
-                      <div key={s.category} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                        <div style={{ width: 120 }}>{s.category}</div>
-                        <div style={{ background: '#91A7FF', height: 10, width: Math.min(220, s.count * 12) }} />
-                        <div style={{ marginLeft: 6 }}>{s.count}</div>
-                      </div>
-                    ))}
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start', marginBottom: 16 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 12, color: '#495057' }}>Tipo documento</label>
+                    <select multiple value={dbTipo} onChange={e => setDbTipo(readMulti(e))} size={Math.min(6, Math.max(3, (optionsFromMeta.tipi || []).length || 0))}>
+                      {(optionsFromMeta.tipi || []).map(v => (<option key={v} value={v}>{v}</option>))}
+                    </select>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => setDbTipo(optionsFromMeta.tipi || [])}>Tutti</button>
+                      <button onClick={() => setDbTipo([])}>Nessuno</button>
+                    </div>
                   </div>
-                  <div style={{ flex: '1 1 260px', background: '#fff', border: '1px solid #eee', borderRadius: 8, padding: 12 }}>
-                    <h4 style={{ marginTop: 0 }}>Per scuola</h4>
-                    {(() => {
-                      if (!data) return <div style={{ color: '#666' }}>Nessun dato</div>
-                      const counts: Record<string, number> = {}
-                      for (const h of data.highlights) {
-                        const fm = meta[h.filename]
-                        const scol = fm?.scuola || '—'
-                        counts[scol] = (counts[scol] || 0) + 1
-                      }
-                      const arr = Object.entries(counts)
-                      if (arr.length === 0) return <div style={{ color: '#666' }}>Nessun dato</div>
-                      return arr.map(([k,v]) => (
-                        <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                          <div style={{ width: 120 }}>{k}</div>
-                          <div style={{ background: '#63E6BE', height: 10, width: Math.min(220, v * 12) }} />
-                          <div style={{ marginLeft: 6 }}>{v}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 12, color: '#495057' }}>Scuola</label>
+                    <select multiple value={dbScuola} onChange={e => setDbScuola(readMulti(e))} size={Math.min(6, Math.max(3, optionsFromMeta.scuole.length))}>
+                      {optionsFromMeta.scuole.map(v => (<option key={v} value={v}>{v}</option>))}
+                    </select>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => setDbScuola(optionsFromMeta.scuole)}>Tutti</button>
+                      <button onClick={() => setDbScuola([])}>Nessuno</button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 12, color: '#495057' }}>Ruolo</label>
+                    <select multiple value={dbRuolo} onChange={e => setDbRuolo(readMulti(e))} size={Math.min(6, Math.max(3, optionsFromMeta.ruoli.length))}>
+                      {optionsFromMeta.ruoli.map(v => (<option key={v} value={v}>{v}</option>))}
+                    </select>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => setDbRuolo(optionsFromMeta.ruoli)}>Tutti</button>
+                      <button onClick={() => setDbRuolo([])}>Nessuno</button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 12, color: '#495057' }}>Gruppo</label>
+                    <select multiple value={dbGruppo} onChange={e => setDbGruppo(readMulti(e))} size={Math.min(6, Math.max(3, optionsFromMeta.gruppi.length))}>
+                      {optionsFromMeta.gruppi.map(v => (<option key={v} value={v}>{v}</option>))}
+                    </select>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => setDbGruppo(optionsFromMeta.gruppi)}>Tutti</button>
+                      <button onClick={() => setDbGruppo([])}>Nessuno</button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 12, color: '#495057' }}>Intervistatore</label>
+                    <select multiple value={dbIntervistatore} onChange={e => setDbIntervistatore(readMulti(e))} size={Math.min(6, Math.max(3, optionsFromMeta.intervistatori.length))}>
+                      {optionsFromMeta.intervistatori.map(v => (<option key={v} value={v}>{v}</option>))}
+                    </select>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => setDbIntervistatore(optionsFromMeta.intervistatori)}>Tutti</button>
+                      <button onClick={() => setDbIntervistatore([])}>Nessuno</button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 12, color: '#495057' }}>Intervistato</label>
+                    <select multiple value={dbIntervistato} onChange={e => setDbIntervistato(readMulti(e))} size={Math.min(6, Math.max(3, optionsFromMeta.intervistati.length))}>
+                      {optionsFromMeta.intervistati.map(v => (<option key={v} value={v}>{v}</option>))}
+                    </select>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => setDbIntervistato(optionsFromMeta.intervistati)}>Tutti</button>
+                      <button onClick={() => setDbIntervistato([])}>Nessuno</button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 12, color: '#495057' }}>Categoria</label>
+                    <select
+                      multiple
+                      value={dbCategoryFilter}
+                      onChange={e => setDbCategoryFilter(readMulti(e))}
+                      size={Math.min(6, Math.max(3, (allCategories.length || 3)))}
+                      disabled={allCategories.length === 0}
+                    >
+                      {allCategories.length === 0 && <option value="">(Nessuna categoria)</option>}
+                      {allCategories.map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => setDbCategoryFilter(allCategories)}>Tutte</button>
+                      <button onClick={() => setDbCategoryFilter([])}>Nessuna</button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 220px', minWidth: 200 }}>
+                    <label style={{ fontSize: 12, color: '#495057' }}>Ricerca testo</label>
+                    <input value={dbQuery} onChange={e => setDbQuery(e.target.value)} placeholder="Cerca in commenti e highlight" />
+                    <button onClick={resetDashboardFilters}>Reimposta filtri</button>
+                  </div>
+                </div>
+                <div style={{ marginBottom: 12, color: '#495057' }}>Commenti filtrati: <strong>{dashboardFiltered.length}</strong></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+                  <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 8, padding: 16 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                      <div>
+                        <h4 style={{ margin: 0 }}>Macro categorie</h4>
+                        <small style={{ color: '#495057' }}>Distribuzione dei commenti per macro categoria</small>
+                      </div>
+                      <div style={{ display: 'inline-flex', border: '1px solid #dee2e6', borderRadius: 999, overflow: 'hidden' }}>
+                        <button onClick={() => setDbMacroChart('istogramma')} style={{ padding: '6px 12px', border: 'none', background: dbMacroChart==='istogramma' ? '#f1f3f5' : '#fff' }}>Istogramma</button>
+                        <button onClick={() => setDbMacroChart('torta')} style={{ padding: '6px 12px', borderLeft: '1px solid #dee2e6', background: dbMacroChart==='torta' ? '#f1f3f5' : '#fff' }}>Torta</button>
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 16 }}>
+                      {renderChart(dashMacroStats.map(item => ({ label: item.label, count: item.count, color: item.color })), dbMacroChart)}
+                    </div>
+                    {dashMacroStats.length > 0 && (
+                      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #dee2e6', paddingBottom: 6 }}>Conteggio · Macro categoria</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {dashMacroStats.map(item => (
+                            <tr key={item.key}>
+                              <td style={{ padding: '6px 0' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <span style={{ minWidth: 32, padding: '2px 8px', borderRadius: 999, background: '#e9ecef', fontVariantNumeric: 'tabular-nums', textAlign: 'center' }}>{item.count}</span>
+                                  <span>{item.label}</span>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                  <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 8, padding: 16 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                      <div>
+                        <h4 style={{ margin: 0 }}>Sotto categorie</h4>
+                        <small style={{ color: '#495057' }}>Dettaglio etichette (XX_YY)</small>
+                      </div>
+                      <div style={{ display: 'inline-flex', border: '1px solid #dee2e6', borderRadius: 999, overflow: 'hidden' }}>
+                        <button onClick={() => setDbCatChart('istogramma')} style={{ padding: '6px 12px', border: 'none', background: dbCatChart==='istogramma' ? '#f1f3f5' : '#fff' }}>Istogramma</button>
+                        <button onClick={() => setDbCatChart('torta')} style={{ padding: '6px 12px', borderLeft: '1px solid #dee2e6', background: dbCatChart==='torta' ? '#f1f3f5' : '#fff' }}>Torta</button>
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 16 }}>
+                      {renderChart(dashCategoryStats.map(item => ({ label: item.label, count: item.count, color: item.color, extra: item.macroLabel !== '—' ? item.macroLabel : undefined })), dbCatChart)}
+                    </div>
+                    {dashCategoryStats.length > 0 && (
+                      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #dee2e6', paddingBottom: 6 }}>Conteggio · Categoria</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {dashCategoryStats.map(item => (
+                            <tr key={item.label}>
+                              <td style={{ padding: '6px 0' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <span style={{ minWidth: 32, padding: '2px 8px', borderRadius: 999, background: '#e9ecef', fontVariantNumeric: 'tabular-nums', textAlign: 'center' }}>{item.count}</span>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                    <span>{item.label}</span>
+                                    <span style={{ fontSize: 11, color: '#495057' }}>{item.macroLabel}</span>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                  <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 8, padding: 16 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+                        <h4 style={{ margin: 0 }}>Confronto dedicato</h4>
+                        <div>
+                          <label style={{ fontSize: 12, color: '#495057', marginRight: 6 }}>Confronta per</label>
+                          <select value={compareMode} onChange={e => { const mode = e.target.value === 'ruolo' ? 'ruolo' : 'scuola'; setCompareMode(mode) }}>
+                            <option value="scuola">Scuola</option>
+                            <option value="ruolo">Ruolo</option>
+                          </select>
                         </div>
-                      ))
-                    })()}
+                        <div style={{ display: 'inline-flex', border: '1px solid #dee2e6', borderRadius: 999, overflow: 'hidden' }}>
+                          <button onClick={() => setDbCompareLayout('columns')} style={{ padding: '6px 12px', border: 'none', background: dbCompareLayout==='columns' ? '#f1f3f5' : '#fff' }}>Affiancati</button>
+                          <button onClick={() => setDbCompareLayout('stack')} style={{ padding: '6px 12px', borderLeft: '1px solid #dee2e6', background: dbCompareLayout==='stack' ? '#f1f3f5' : '#fff' }}>Verticale</button>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <label style={{ fontSize: 12, color: '#495057' }}>{compareMode === 'scuola' ? 'Scuola A' : 'Ruolo A'}</label>
+                          <select value={compareSelectionA} onChange={e => setCompareSelectionA(e.target.value)}>
+                            {compareOptions.length === 0 && <option value="">(Nessun valore)</option>}
+                            {compareOptions.map(opt => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <label style={{ fontSize: 12, color: '#495057' }}>{compareMode === 'scuola' ? 'Scuola B' : 'Ruolo B'}</label>
+                          <select value={compareSelectionB} onChange={e => setCompareSelectionB(e.target.value)}>
+                            {compareOptions.length === 0 && <option value="">(Nessun valore)</option>}
+                            {compareOptions.map(opt => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 20, display: 'flex', flexDirection: dbCompareLayout === 'columns' ? 'row' : 'column', gap: 16 }}>
+                      <div style={{ flex: 1, minWidth: dbCompareLayout === 'columns' ? 280 : undefined }}>
+                        {renderComparisonPanel(compareMode === 'scuola' ? 'Scuola A' : 'Ruolo A', compareSliceA)}
+                      </div>
+                      <div style={{ flex: 1, minWidth: dbCompareLayout === 'columns' ? 280 : undefined }}>
+                        {renderComparisonPanel(compareMode === 'scuola' ? 'Scuola B' : 'Ruolo B', compareSliceB)}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </>
@@ -1456,14 +2314,14 @@ function App() {
         <h3>Evidenziati</h3>
         {!data && <div>Nessun dato.</div>}
         {data && data.highlights.filter(h => !viewerDoc || h.filename === viewerDoc).map((h, idx) => {
-          const color = (h.highlight_color||'').toLowerCase()
-          const rawCat = colorCategoryFromMap(color, colorMap)
-          const cat = color ? (rawCat || colorLabel(color)) : 'non-categorizzato'
+          const resolved = resolveHighlightCategory(h)
+          const cat = resolved.category || 'non-categorizzato'
+          const col = resolved.color || '#bbb'
           return (
             <div
               key={idx}
               onClick={() => jumpTo(h)}
-              style={{ cursor: 'pointer', border: '1px solid #eee', padding: 8, borderLeft: `4px solid ${categoryColors[cat] || color || 'yellow'}`, marginBottom: 8 }}
+              style={{ cursor: 'pointer', border: '1px solid #eee', padding: 8, borderLeft: `4px solid ${col}`, marginBottom: 8 }}
             >
               <div style={{ fontSize: 12, color: '#555' }}>{h.filename}</div>
               <div style={{ fontWeight: 600 }}>{h.text}</div>
@@ -1476,9 +2334,8 @@ function App() {
           const filtered = !data ? [] : data.highlights.filter(h => !viewerDoc || h.filename === viewerDoc)
           const counts: Record<string, number> = {}
           for (const h of filtered) {
-            const c = (h.highlight_color||'').toLowerCase()
-            const rawCat = colorCategoryFromMap(c, colorMap)
-            const cat = c ? (rawCat || colorLabel(c)) : 'non-categorizzato'
+            const resolved = resolveHighlightCategory(h)
+            const cat = resolved.category || 'non-categorizzato'
             counts[cat] = (counts[cat]||0)+1
           }
           const localStats = Object.entries(counts).map(([category, count]) => ({ category, count })).sort((a,b)=>b.count-a.count)

@@ -8,6 +8,7 @@ from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from lxml import etree
 
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+VALID_PREFIXES = {"CE", "CS", "BE", "IN", "CC", "A"}
 
 
 def normalize_highlight_value(val):
@@ -169,11 +170,22 @@ def parse_docx(file_bytes: bytes, filename: str) -> Dict[str, Any]:
     quoted_map = get_commented_spans(doc)
 
     comments_list: List[Dict[str, Any]] = []
-    code_re = re.compile(r"\b[A-Z]{2}_[A-Z]\b")
+    code_re = re.compile(r"\b[A-Z]{1,4}(?:_[A-Z]{1,4})?\b")
     for cid, meta in comments_map.items():
         text = meta.get("comment", "")
-        m = code_re.search(text or "")
-        code = m.group(0) if m else None
+        raw_codes = code_re.findall(text or "") if text else []
+        codes: List[str] = []
+        for token in raw_codes:
+            normalized = (token or "").strip().upper()
+            if not normalized:
+                continue
+            prefix = normalized.split("_")[0]
+            if prefix not in VALID_PREFIXES:
+                continue
+            if normalized in codes:
+                continue
+            codes.append(normalized)
+        code = codes[0] if codes else None
         comments_list.append(
             {
                 "filename": filename,
@@ -183,6 +195,7 @@ def parse_docx(file_bytes: bytes, filename: str) -> Dict[str, Any]:
                 "text": text,
                 "quoted": quoted_map.get(cid, ""),
                 "code": code,
+                "codes": codes,
             }
         )
     return {"highlights": highlights, "comments": comments_list, "paragraphs": paragraphs}
