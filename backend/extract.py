@@ -6,17 +6,77 @@ import pandas as pd
 from docx import Document
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from lxml import etree
+from docx.oxml.ns import qn
 
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 VALID_PREFIXES = {"CE", "CS", "BE", "IN", "CC", "A"}
+
+# Map common shading hex codes to the same identifiers returned by python-docx highlights
+HEX_TO_HIGHLIGHT = {
+    "ffff00": "yellow",
+    "00ff00": "bright_green",
+    "00ffff": "turquoise",
+    "ff00ff": "pink",
+    "0000ff": "blue",
+    "ff0000": "red",
+    "000080": "dark_blue",
+    "008080": "teal",
+    "008000": "green",
+    "800080": "violet",
+    "800000": "dark_red",
+    "808000": "dark_yellow",
+    "7f7f7f": "gray_50",
+    "bfbfbf": "gray_25",
+    "000000": "black",
+    "ffffff": "white",
+}
 
 
 def normalize_highlight_value(val):
     if val is None:
         return None
-    s = str(val)
+    s = str(val).strip()
+    if not s:
+        return None
+    if s.startswith("#"):
+        s = s[1:]
     name = s.split(".")[-1] if "." in s else s
-    return name.strip().lower()
+    lowered = name.strip().lower()
+    if lowered in HEX_TO_HIGHLIGHT:
+        return HEX_TO_HIGHLIGHT[lowered]
+    # fallback: keep hex strings normalized without trailing alpha channel
+    if re.fullmatch(r"[0-9a-f]{8}", lowered):
+        lowered = lowered[:6]
+    return lowered
+
+
+def run_highlight_or_shading(run) -> str | None:
+    """Return normalized highlight color, supporting both highlight and shading."""
+    color = normalize_highlight_value(run.font.highlight_color)
+    if color:
+        return color
+    # Inspect shading (<w:shd>) which some docs use instead of highlight
+    shd_elems = run._element.xpath("w:rPr/w:shd")
+    if not shd_elems:
+        return None
+    shd = shd_elems[0]
+    fill = shd.get(qn("w:fill"))
+    if fill and fill.lower() != "auto":
+        normalized = normalize_highlight_value(fill)
+        if normalized:
+            return normalized
+    color_attr = shd.get(qn("w:color"))
+    if color_attr and color_attr.lower() not in {"auto", "000000"}:
+        normalized = normalize_highlight_value(color_attr)
+        if normalized:
+            return normalized
+    theme_fill = shd.get(qn("w:themeFill"))
+    if theme_fill:
+        return normalize_highlight_value(theme_fill)
+    theme_color = shd.get(qn("w:themeColor"))
+    if theme_color:
+        return normalize_highlight_value(theme_color)
+    return None
 
 
 def iter_paragraphs_with_index(doc: Document):
@@ -89,7 +149,7 @@ def extract_highlights_with_offsets(doc: Document, filename: str) -> Tuple[List[
         for r in p.runs:
             text = r.text or ""
             rlen = len(text)
-            color = normalize_highlight_value(r.font.highlight_color)
+            color = run_highlight_or_shading(r)
             if rlen:
                 if color is not None:
                     if cur_color is None:

@@ -1294,7 +1294,14 @@ function App() {
       setData(json)
       // initialize empty metadata for each filename
       const m: Record<string, FileMeta> = { ...meta }
-      const filenames: string[] = Array.from(new Set<string>(json.highlights.map((h: Highlight) => h.filename)))
+      const filenamesSet = new Set<string>()
+      for (const h of json.highlights as Highlight[]) {
+        if (h?.filename) filenamesSet.add(h.filename)
+      }
+      for (const c of json.comments as CommentItem[]) {
+        if (c?.filename) filenamesSet.add(c.filename)
+      }
+      const filenames: string[] = Array.from(filenamesSet)
       filenames.forEach(fn => {
         if (!m[fn]) m[fn] = { tipo: 'Intervista', intervistatore: '', intervistato: '', ruolo: '', scuola: '', gruppo: '', noteGruppo: '' }
       })
@@ -1934,10 +1941,15 @@ function App() {
               <>
                 <h3>Documenti</h3>
                 {(() => {
-                  const fileSet = new Set<string>([
-                    ...((data ? data.highlights : []) as Highlight[]).map(h => h.filename),
-                    ...Object.keys(meta)
-                  ])
+                  const fileSet = new Set<string>()
+                  for (const h of (data ? (data.highlights as Highlight[]) : [])) {
+                    if (h?.filename) fileSet.add(h.filename)
+                  }
+                  for (const c of (data ? (data.comments as CommentItem[]) : [])) {
+                    if (c?.filename) fileSet.add(c.filename)
+                  }
+                  for (const key of Object.keys(meta)) fileSet.add(key)
+                  
                   let files = Array.from(fileSet)
                   // Build options from meta
                   const opts = {
